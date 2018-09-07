@@ -1,0 +1,55 @@
+---
+title: "Initial analysis - coastwide salmon"
+author: "Mike Litzow"
+date: "9/7/2018"
+output: html_document
+---
+
+This is a first summary of analysis to test the hypothesis of changing relationships between salmon survival (recruits per spawner) and ocean temperature.
+```{r setup, include=FALSE, message=F, warning=F}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Begin with pink salmon. These are the runs we have to work with.
+```{r}
+# load the pink salmon data!
+
+pink <- read.csv("pink.data.csv") 
+
+pink.runs <- pink %>%
+  group_by(stock) %>%
+  summarise(stock.id = mean(stock.id), lat=mean(lat), long=mean(360-long))
+
+
+
+plot(pink.runs$long, pink.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(pink.runs$long, pink.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+# now fit model to pink data
+
+# fit the best model 
+# first, southern stocks
+mod1 <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+mod2 <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+anova(mod1, mod2)
+
+# now GOA
+mod1 <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+mod2 <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+anova(mod1, mod2)
+
+# and EBS
+mod1 <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+mod2 <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=pink[pink$our.region == "EBS",], control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+anova(mod1, mod2)
+```
+
