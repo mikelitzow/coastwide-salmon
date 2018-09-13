@@ -8,7 +8,7 @@ library(mapdata)
 data <- read.csv("coastwide pink data CHECKED.csv") 
 # these are the data that I provided to Bethany/Lorenzo/Patri
 
-# restrict to GOA, and use=1 to make sure we only include good data, limit to data from 1960 onwards...
+# restrict to GOA, and use=1 to make sure we only include good data
 pink <- filter(data, use==1)
 
 # take a look at the included runs
@@ -152,3 +152,39 @@ for(i in 1:nrow(pink)){
 
 # and save
 write.csv(pink, "pink.data.csv")
+
+##############
+# sockeye
+
+data <- read.csv("coastwide sockeye data CHECKED.csv") 
+# these are the data that I provided to Bethany/Lorenzo/Patri
+
+# restrict to GOA, and use=1 to make sure we only include good data, and sntry year in 1950 and later
+sock <- filter(data, use==1, entry.yr >= 1950)
+
+# add era
+sock$era <- "early"
+sock$era[sock$entry.yr >= 1989] <- "late"
+# and log recruits
+sock$ln.recr <- log(sock$recruits)
+# and save
+write.csv(sock, "sockeye.data.csv")
+
+
+############
+# chum
+
+data <- read.csv("coastwide chum data CHECKED.csv") 
+# these are the data that I provided to Bethany/Lorenzo/Patri
+
+# restrict to GOA, and use=1 to make sure we only include good data, and sntry year in 1950 and later
+chum <- filter(data, use==1, entry.yr >= 1950)
+
+# add era
+chum$era <- "early"
+chum$era[chum$entry.yr >= 1989] <- "late"
+# and log recruits
+chum$ln.recr <- log(chum$recruits)
+# and save
+write.csv(chum, "chum.data.csv")
+
