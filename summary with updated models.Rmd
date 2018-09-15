@@ -1,0 +1,778 @@
+---
+title: "Initial analysis - coastwide salmon"
+author: "Mike Litzow"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+This is a first summary of analysis to test the hypothesis of changing relationships between salmon survival (recruits per spawner) and ocean temperature, over the entire range of North American spawning populations. The covariate in analysis is SST within 500 km of ocean entry over the months found to show significant relationships to survival by Mueter et al. (2005).
+
+The hypothesis of non-stationary SST-survival relationships is supported by previous results focused only on the GOA. This completed work identified changing variance in the Aleutian Low as a mechanism contributing to nonstationary SST-survival relationships in the GOA. The basin-scale importance of the Aleutian Low for North Pacific ecosystem dynamics suggests that similar dynamics might exist in other North American populations, i.e., in the Bering Sea, and areas south of the Gulf of Alaska (British Columbia, Washington).
+
+The approach here is to:
+
+1) Test for changing SST effects on recruits per spawner after 1988/89 separately for each ecosystem (Bering Sea, Gulf of Alaska, southern areas).
+
+2) Test for differences in spatial respones to SST variability before and after 1988/89. Is the paradigm of postitive SST effects in the north and negative effects in the south contingent on the time of observation?
+
+3) Use a model selection approach to evaluate 1988/89 as the best change point for SST-survival relationships.
+
+Following our previous paper and the approach of Mueter et al. 2002 CJFAS, we will use mixed effects models treating individual runs as random effects and spawner abundance as a population-specific fixed effect, and we will model each of the three species (pink, sockeye, chum) separately. Based on Bethany's earlier work, and our work on the GOA, we'll use run-specific intercepts and SST terms as the random effects in all models. We will also use an offset ln(spawners) fixed effect to avoid having the # of spawners as a term on both sides of the Ricker model equation. All models include first-order autocorrelation error structure.
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.align = "left")
+library(nlme)
+library(dplyr)
+library(maps)
+library(mapdata)
+library(ggplot2)
+library(MuMIn)
+library(gtools)
+options(max.print = 99999)
+```
+###Pink Salmon
+Begin with pink salmon. These are the runs we have to work with.
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the pink salmon data!
+
+pink <- read.csv("pink.data.csv") 
+
+pink.runs <- pink %>%
+  group_by(stock) %>%
+  summarise(stock.id = mean(stock.id), lat=mean(lat), long=mean(360-long))
+
+plot(pink.runs$long, pink.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(pink.runs$long, pink.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+**Fig. 1** Pink salmon run locations.
+
+When runs are separated into even and odd populations, we have 6 runs for the EBS, 20 for the GOA, and 9 for southern areas. Start and end years refer to ocean entry year.
+```{r}
+pink.areas <- pink %>%
+  group_by(full.stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(entry.yr), end.year=max(entry.yr))
+
+change <- pink.areas$area==1 
+pink.areas$area[change] <- "Bering Sea"
+
+change <- pink.areas$area==2 
+pink.areas$area[change] <- "Gulf of Alaska"
+
+change <- pink.areas$area==3 
+pink.areas$area[change] <- "South"
+
+pink.areas <- as.data.frame(pink.areas)
+pink.areas <- arrange(pink.areas, area)
+pink.areas
+```
+
+Start by testing for changing relationships with SST pre/post 1988/89 in each system (south, GOA, EBS).
+
+I'll illustrate the code with southern region data. Approach is to compare the model with and without an era interaction term using the likelihood ratio test.
+
+```{r, echo=T}
+# 
+# p.s.mod1 <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, 
+#             data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+# 
+# p.s.mod2 <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, 
+#             data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+p.s.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
+            data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+p.s.mod2 <- lme(log(recruits/spawners) ~ loc.sst+era + full.stock:spawners, random = ~ 1  + loc.sst | full.stock, 
+            data=pink[pink$our.region == "South",], control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+
+anova(p.s.mod1, p.s.mod2)
+```
+
+So the era x sst interaction is very weakly supported in the southern area.
+
+Here are the GOA results:
+```{r}
+# now GOA
+p.g.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
+            data=pink[pink$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+p.g.mod2 <- lme(log(recruits/spawners) ~ loc.sst+era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
+            data=pink[pink$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+anova(p.g.mod1, p.g.mod2)
+```
+Quite strong support, as we have seen before.
+
+And for the EBS:
+```{r}
+
+# and EBS
+p.e.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
+            data=pink[pink$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+p.e.mod2 <- lme(log(recruits/spawners) ~ loc.sst+era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
+            data=pink[pink$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+anova(p.e.mod1, p.e.mod2)
+```
+
+A plot of era-specific SST effects looks like this:
+
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+p.plot <- data.frame(area=rep(c("South", "GOA", "EBS"), each=2), era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+#south
+p.plot[1,3:5] <- intervals(p.s.mod1)$fixed[2,]
+p.plot[2,3:5] <- intervals(p.s.mod1)$fixed[2,2] + intervals(p.s.mod1)$fixed[4,]
+
+#goa
+p.plot[3,3:5] <- intervals(p.g.mod1, which="fixed")$fixed[2,]
+p.plot[4,3:5] <- intervals(p.g.mod1, which="fixed")$fixed[2,2] + intervals(p.g.mod1, which="fixed")$fixed[4,]
+
+#ebs
+p.plot[5,3:5] <- intervals(p.e.mod1)$fixed[2,]
+p.plot[6,3:5] <- intervals(p.e.mod1)$fixed[2,2] + intervals(p.e.mod1)$fixed[4,]
+
+p.plot$era <- reorder(p.plot$era, -order(p.plot$era))
+dodge <- position_dodge(width=0.9)
+ggplot(p.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) +
+  ggtitle("Pink salmon") + xlab("") + ylab("SST coefficient") + theme(legend.position = "top")
+```
+**Fig. 2** Pink salmon: ecosystem-specific pre/post 1988/89 SST coefficients from mixed-effects models. Error bars = 95% CI.
+
+One thing that jumps out here is that the idea of Alaskan stocks showing a positive response to SST variability and southern stocks a negative response appears to be time-dependent. We can test that with era-specific plots for SST coefficient vs. distance along the coast starting from the southernmost stock.
+
+Here model 1 has the following fixed effects structure, allowing the distance x sst interaction to vary between eras: 
+  log(recruits/spawner) = era + sst x distance + sst x distance x era + # spawners x stock id 
+  
+And model 2 invokes a time-invariant distance x sst interaction:
+  log(recruits/spawner) = sst x distance + # spawners x stock id 
+
+```{r}
+mod1 <- lme(log(recruits/spawners) ~ loc.sst:dist*era + full.stock:spawners, 
+            random = ~ 1 + loc.sst | full.stock, data=pink, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+mod2 <- lme(log(recruits/spawners) ~ loc.sst:dist + full.stock:spawners, 
+            random = ~ loc.sst | full.stock, data=pink, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+anova(mod1, mod2)
+```
+
+So there is very strong support for a different SST x distance interaction in the two eras. The results for the fixed effects are as follows. Note the very strong support for era-specific distance effects (final line).
+
+```{r}
+summary(mod1)$tTable
+```
+
+
+```{r, fig.height=3, fig.width=4, fig.align="center"}
+dim(intervals(mod1)$fixed)
+plot <- data.frame(LCI=intervals(mod1)$fixed[3,1], effect=intervals(mod1)$fixed[3,2], UCI=intervals(mod1)$fixed[3,3])
+
+plot[2,] <- c(intervals(mod1)$fixed[39,1]+intervals(mod1)$fixed[3,2], intervals(mod1)$fixed[39,2]+intervals(mod1)$fixed[3,2], intervals(mod1)$fixed[39,3]+intervals(mod1)$fixed[3,2])
+
+plot$era <- as.factor(c("Before 1988/89", "After 1988/89"))
+plot$era <- reorder(plot$era, -order(plot$era))
+
+ggplot(plot, aes(y=effect, x=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + ggtitle("Pink salmon: distance x SST effect by era") + xlab("") + ylab("Distance x SST coefficient")
+```
+**Fig. 3** Pink salmon: interaction between south-north distance and SST, by era. Distance measured in km from the southernmost stock. Error bars = 95% CI.
+
+Just to make sure that this distance x SST model is the best way to address the evolution of spatial differences through time, we'll ask if that model (mod1) is better than a model invoking ecosystem-specific SST effects in the two eras (mod2), or Alaska and southern area SST effects that differ by era (mod3).
+
+Fixed effects for both models are formulated as:
+  log(recruits) = sst:region*era + # spawners:stock id + offset(log(spawners))
+  
+In model 2, the regions are ecosystems (EBS, GOA, South). In model 3, the regions are Alaska (EBS and GOA combined) and South.
+```{r}
+# compare the linear distance model (mod1) with models invoking area-specific SST effects by era,
+# either by ecosystem, or AK vs. southern areas
+mod1 <- lme(ln.recr ~ loc.sst:dist*era + full.stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | full.stock, data=pink, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+mod2 <- lme(ln.recr ~ loc.sst:our.region*era + full.stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | full.stock, data=pink, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+pink$ak.south <- NA
+for(i in 1:nrow(pink)){
+  ifelse(pink$our.region[i] %in% c("EBS", "GOA"), pink$ak.south[i] <- "AK", pink$ak.south[i] <- "South")
+}
+
+mod3 <- lme(ln.recr ~ loc.sst:ak.south*era + full.stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | full.stock, data=pink, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+
+AICc(mod1, mod2, mod3)
+```
+
+So, yes, the distance x sst model (mod1) appears to be the best way to address that question.
+
+Finally, for pink salmon, we'll assess the support for a change in SST effects in 1988/89 vs. other change points. For each ecosystem, we'll fit candidate models that invoke different change points, and we'll evaluate the overall support for different possible timings of changing SST-survival relationships by comparing delta-AICc scores.
+
+```{r, fig.height=4, fig.width=7, fig.align="center"}
+
+thr.pi <- 1978:1994 # 15-yr minimum periods on either side of candidate thresholds
+plot.thr.pi <- thr.pi + 0.5 # plot with an offset of a half year, i.e., between threshold years
+AICc.pi <- NA # object to save output
+
+# by region - first, EBS
+temp <- filter(pink, our.region=="EBS")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+ebs.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  
+  AICc.pi[i] <- AICc(mod)
+}
+# get d-AICc for odd and even threshold years!
+odd <- odd(thr.pi)
+min.odd <- min(AICc.pi[odd])
+
+even <- even(thr.pi)
+min.even <- min(AICc.pi[even])
+
+min.AIC <- rep(NA, length(AICc.pi))
+min.AIC[odd] <- min.odd
+min.AIC[even] <- min.even
+
+dAICc.EBS <- AICc.pi-min.AIC
+d.ebs.fixed <- ebs.fixed-min.AIC
+
+# then, GOA
+temp <- filter(pink, our.region=="GOA")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+goa.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  
+  AICc.pi[i] <- AICc(mod)
+}
+# get d-AICc for odd and even threshold years!
+odd <- odd(thr.pi)
+min.odd <- min(AICc.pi[odd])
+
+even <- even(thr.pi)
+min.even <- min(AICc.pi[even])
+
+min.AIC <- rep(NA, length(AICc.pi))
+min.AIC[odd] <- min.odd
+min.AIC[even] <- min.even
+
+dAICc.GOA <- AICc.pi-min.AIC
+d.goa.fixed <- goa.fixed-min.AIC
+
+# and south
+temp <- filter(pink, our.region=="South")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+south.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  
+  AICc.pi[i] <- AICc(mod)
+}
+# get d-AICc for odd and even threshold years!
+odd <- odd(thr.pi)
+min.odd <- min(AICc.pi[odd])
+
+even <- even(thr.pi)
+min.even <- min(AICc.pi[even])
+
+min.AIC <- rep(NA, length(AICc.pi))
+min.AIC[odd] <- min.odd
+min.AIC[even] <- min.even
+
+dAICc.south <- AICc.pi-min.AIC
+d.south.fixed <- south.fixed-min.AIC
+
+ebs.aic <- data.frame(year=1978:1994, area="EBS, n=6", d.aic=dAICc.EBS, fixed=mean(d.ebs.fixed))
+goa.aic <- data.frame(year=1978:1994, area="GOA, n=20", d.aic=dAICc.GOA, fixed=mean(d.goa.fixed))
+south.aic <- data.frame(year=1978:1994, area="South, n=9", d.aic=dAICc.south, fixed=mean(d.south.fixed))
+
+plot <- rbind(ebs.aic, goa.aic, south.aic)
+
+plot.fixed <- plot  %>%  
+  group_by(area) %>%
+  summarise(fixed = mean(fixed))
+
+ggplot(plot, aes(x=year, y=d.aic)) + geom_line() + geom_point() + 
+  ylab("Delta-AICc") + xlab("Threshold year") + ggtitle("Pink salmon: timing of change") +
+  theme(legend.position = "top") + geom_hline(data = plot.fixed, aes(yintercept = fixed), lty=2) +
+  facet_wrap(~area, scale="free_y")
+```
+**Fig. 4** Support for timing in the change in SST effects y ecosystem. Delta-AICc scores for random-effects models fit to all runs within each system. Dashed lines indicate delta-AICc values for model invoking stationary SST effects.
+
+So the GOA result, as we have seen before, is consistent with a change in SST effects during the late 1980s. The EBS results also show a minimum around the late 1980s, though there is also support for an earlier change, in the late 1970s. The soutern runs seem to show the most different pattern, with the strongest support for a change early, in the late 1970s.
+
+This part of the analysis I think could benefit from a more detailed look. I'm thinking that a run-by-run analysis using GLS (fixed effects) models would be the best way to evaluate the support for different timings. One complicating factor in all this is that there are few years of observation to support analysis of the later candidate thresholds. Many of our time series don't extend beyond 2008 or 2009. Updated time series might be helpful in this context.
+
+-----
+###Sockeye Salmon
+Now we turn to sockeye salmon. These are the runs we have to work with.
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the sockeye salmon data!
+
+sock <- read.csv("sockeye.data.csv") 
+
+sock.runs <- sock %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+plot(sock.runs$long, sock.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(sock.runs$long, sock.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+**Fig. 5** Sockeye salmon run locations.
+
+It doesn't look like much in terms of replication for southern populations, but there are actually a number of populations in that single dot in the Fraser River:
+```{r}
+sock.areas <- sock %>%
+  group_by(stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(entry.yr), end.year=max(entry.yr))
+
+change <- sock.areas$area==1 
+sock.areas$area[change] <- "Bering Sea"
+
+change <- sock.areas$area==2 
+sock.areas$area[change] <- "Gulf of Alaska"
+
+change <- sock.areas$area==3 
+sock.areas$area[change] <- "South"
+
+sock.areas <- as.data.frame(sock.areas)
+sock.areas <- arrange(sock.areas, area)
+sock.areas
+```
+
+Again, we'll look at changing SST effects by ecosystem. First, in the south:
+```{r}
+
+s.s.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+s.s.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(s.s.mod1, s.s.mod2)
+```
+
+And the GOA:
+```{r}
+s.g.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+s.g.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(s.g.mod1, s.g.mod2)
+```
+
+And the EBS.
+```{r}
+
+s.e.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+s.e.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=sock[sock$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(s.e.mod1, s.e.mod2)
+```
+
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+s.plot <- data.frame(area=rep(c("South", "GOA", "EBS"), each=2), era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+#south
+s.plot[1,3:5] <- intervals(s.s.mod1)$fixed[2,]
+s.plot[2,3:5] <- intervals(s.s.mod1)$fixed[2,2] + intervals(s.s.mod1)$fixed[4,]
+
+#goa
+s.plot[3,3:5] <- intervals(s.g.mod1, which="fixed")$fixed[2,]
+s.plot[4,3:5] <- intervals(s.g.mod1, which="fixed")$fixed[2,2] + intervals(s.g.mod1, which="fixed")$fixed[4,]
+
+#ebs
+s.plot[5,3:5] <- intervals(s.e.mod1)$fixed[2,]
+s.plot[6,3:5] <- intervals(s.e.mod1)$fixed[2,2] + intervals(s.e.mod1)$fixed[4,]
+
+s.plot$era <- reorder(s.plot$era, order(-s.plot$era))
+dodge <- position_dodge(width=0.9)
+ggplot(s.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) +
+  ggtitle("Sockeye salmon") + xlab("") + ylab("SST coefficient") + theme(legend.position = "top")
+```
+**Fig. 6** Sockeye salmon: ecosystem-specific pre/post 1988/89 SST coefficients from mixed-effects models. Error bars = 95% CI.
+
+The change in SST effects is only significant in the GOA. This plot does suggest that the Alaska-south difference in SST effects only pertains to the pre-1988/89 data. We can test that hypothesis with a mixed-effects model invoking the following fixed effects stucture (model 1):
+  log(recruits) = sst:region*era + # spawners:stock ID + offset(log(spawners))
+  
+That model is compared with a model invoking a time-invariant AK-south difference (model 2):
+  log(recruits) = sst:region + # spawners:stock ID + offset(log(spawners))
+
+Note that in these models "region" refers to either Alaska or the south.
+
+```{r}
+sock$ak.south <- NA
+for(i in 1:nrow(sock)){
+  ifelse(sock$our.region[i] %in% c("EBS", "GOA"), sock$ak.south[i] <- "AK", sock$ak.south[i] <- "South")
+}
+
+mod1 <- lme(ln.recr ~ loc.sst:ak.south*era + stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | stock, data=sock, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+mod2 <- lme(ln.recr ~ loc.sst:ak.south  + stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | stock, data=sock, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(mod1, mod2)
+
+```
+
+So there isn't support for that hypothesis. The sockeye story seems to be very much a story of changing SST effects in the GOA, and no support for a change in the other ecosystems.
+
+```{r, fig.height=4, fig.width=7, fig.align="center"}
+
+thr <- 1978:1994 # 15-yr minimum periods on either side of candidate thresholds
+plot.thr <- thr + 0.5 # plot with an offset of a half year, i.e., between threshold years
+AICc <- NA # object to save output
+
+# by region - first, EBS
+temp <- filter(sock, our.region=="EBS")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+ebs.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+dAICc.EBS <- AICc-min(AICc)
+d.ebs.fixed <- ebs.fixed-min(AICc)
+
+# then, GOA
+temp <- filter(sock, our.region=="GOA")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+goa.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+dAICc.GOA <- AICc-min(AICc)
+d.goa.fixed <- goa.fixed-min(AICc)
+
+# and south
+temp <- filter(sock, our.region=="South")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+south.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+
+dAICc.south <- AICc-min(AICc)
+d.south.fixed <- south.fixed-min(AICc)
+
+ebs.aic <- data.frame(year=1978:1994, area="EBS, n=9", d.aic=dAICc.EBS, fixed=mean(d.ebs.fixed))
+goa.aic <- data.frame(year=1978:1994, area="GOA, n=9", d.aic=dAICc.GOA, fixed=mean(d.goa.fixed))
+south.aic <- data.frame(year=1978:1994, area="South, n=10", d.aic=dAICc.south, fixed=mean(d.south.fixed))
+
+plot <- rbind(ebs.aic, goa.aic, south.aic)
+
+plot.fixed <- plot  %>%  
+  group_by(area) %>%
+  summarise(fixed = mean(fixed))
+
+ggplot(plot, aes(x=year, y=d.aic)) + geom_line() + geom_point() + 
+  ylab("Delta-AICc") + xlab("Threshold year") + ggtitle("Sockeye salmon: timing of change") +
+  theme(legend.position = "top") + geom_hline(data = plot.fixed, aes(yintercept = fixed), lty=2) +
+  facet_wrap(~area, scale="free_y")
+```
+
+**Fig. 7** Support for timing in the change in SST effects y ecosystem for sockeye salmon. Delta-AICc scores for random-effects models fit to all runs within each system. Dashed lines indicate delta-AICc values for model invoking stationary SST effects.
+
+So the best timing for the change in the GOA response to SST appears to be later, in the early 1990s. Again, I think this timing analysis could be improved by using updated time series and applying fixed models to each run separately.
+
+-----
+###Chum Salmon
+Now finish with chum salmon. These are the runs we have to work with.
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the chum salmon data!
+
+chum <- read.csv("chum.data.csv") 
+
+chum.runs <- chum %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+plot(chum.runs$long, chum.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(chum.runs$long, chum.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+**Fig. 8** Chum salmon run locations.
+
+And the table of runs. Only 3 available for the EBS. Note also that the Southern runs end in 2006, so will likely be helpful if we can update these.
+
+```{r}
+chum.areas <- chum %>%
+  group_by(stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(entry.yr), end.year=max(entry.yr))
+
+change <- chum.areas$area==1 
+chum.areas$area[change] <- "Bering Sea"
+
+change <- chum.areas$area==2 
+chum.areas$area[change] <- "Gulf of Alaska"
+
+change <- chum.areas$area==3 
+chum.areas$area[change] <- "South"
+
+chum.areas <- as.data.frame(chum.areas)
+chum.areas <- arrange(chum.areas, area)
+chum.areas
+```
+Again, the area-specific test for different sst effects in different eras. The south:
+```{r}
+
+c.s.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+c.s.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(c.s.mod1, c.s.mod2)
+```
+And GOA:
+```{r}
+c.g.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+c.g.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(c.g.mod1, c.g.mod2)
+```
+
+And the EBS:
+```{r}
+
+c.e.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+c.e.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+            data=chum[chum$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(c.e.mod1, c.e.mod2)
+```
+
+So support for our hypothesis only in the southern area.
+
+Plot looks like this:
+
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+c.plot <- data.frame(area=rep(c("South", "GOA", "EBS"), each=2), era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+#south
+c.plot[1,3:5] <- intervals(c.s.mod1)$fixed[2,]
+c.plot[2,3:5] <- intervals(c.s.mod1)$fixed[2,2] + intervals(c.s.mod1)$fixed[4,]
+
+#goa
+c.plot[3,3:5] <- intervals(c.g.mod1, which="fixed")$fixed[2,]
+c.plot[4,3:5] <- intervals(c.g.mod1, which="fixed")$fixed[2,2] + intervals(c.g.mod1, which="fixed")$fixed[4,]
+
+#ebs
+c.plot[5,3:5] <- intervals(c.e.mod1, which="fixed")$fixed[2,]
+c.plot[6,3:5] <- intervals(c.e.mod1, which="fixed")$fixed[2,2] + intervals(c.e.mod1, which="fixed")$fixed[4,]
+
+c.plot$era <- reorder(c.plot$era, order(-c.plot$era))
+dodge <- position_dodge(width=0.9)
+ggplot(c.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) +
+  ggtitle("Chum salmon") + xlab("") + ylab("SST coefficient") + theme(legend.position = "top")
+```
+**Fig. 9** Era-specific SST effects on chum salmon survival by area.
+
+Again, I'll test for an era-specific difference in AK vs. south area differences in sst effects. The first model treats these as time-dependent (model 1):
+  log(recruits) = sst:region*era + # spawners:stock ID + offset(log(spawners))
+  
+That model is compared with a model invoking a time-invariant AK-south difference (model 2):
+  log(recruits) = sst:region + # spawners:stock ID + offset(log(spawners))
+
+
+```{r}
+chum$ak.south <- NA
+for(i in 1:nrow(chum)){
+  ifelse(chum$our.region[i] %in% c("EBS", "GOA"), chum$ak.south[i] <- "AK", chum$ak.south[i] <- "South")
+}
+
+mod1 <- lme(ln.recr ~ loc.sst:ak.south*era + stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | stock, data=chum, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+mod2 <- lme(ln.recr ~ loc.sst:ak.south  + stock:spawners + offset(log(spawners)), 
+            random = ~ loc.sst | stock, data=chum, 
+            control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+
+anova(mod1, mod2)
+
+```
+
+So again, there is support for the hypothesis that regional differences in SST effects are contingent on time.
+
+Finally, the evaluation of various change points in the SST effect.
+
+```{r, fig.height=4, fig.width=7, fig.align="center"}
+
+thr <- 1978:1994 # 15-yr minimum periods on either side of candidate thresholds
+plot.thr <- thr + 0.5 # plot with an offset of a half year, i.e., between threshold years
+AICc <- NA # object to save output
+
+# by region - first, EBS
+temp <- filter(chum, our.region=="EBS")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+ebs.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+dAICc.EBS <- AICc-min(AICc)
+d.ebs.fixed <- ebs.fixed-min(AICc)
+
+# then, GOA
+temp <- filter(chum, our.region=="GOA")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+goa.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+dAICc.GOA <- AICc-min(AICc)
+d.goa.fixed <- goa.fixed-min(AICc)
+
+# and south
+temp <- filter(chum, our.region=="South")
+
+# AICc for fixed model
+mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+south.fixed <- AICc(mod)
+
+for(i in 1:length(thr.pi)){
+  # i <- 1
+  temp$era <- "early"  
+  temp$era[temp$entry.yr > thr.pi[i]] <- "late"
+  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  
+  AICc[i] <- AICc(mod)
+}
+
+
+dAICc.south <- AICc-min(AICc)
+d.south.fixed <- south.fixed-min(AICc)
+
+ebs.aic <- data.frame(year=1978:1994, area="EBS, n=3", d.aic=dAICc.EBS, fixed=mean(d.ebs.fixed))
+goa.aic <- data.frame(year=1978:1994, area="GOA, n=10", d.aic=dAICc.GOA, fixed=mean(d.goa.fixed))
+south.aic <- data.frame(year=1978:1994, area="South, n=8", d.aic=dAICc.south, fixed=mean(d.south.fixed))
+
+plot <- rbind(ebs.aic, goa.aic, south.aic)
+
+plot.fixed <- plot  %>%  
+  group_by(area) %>%
+  summarise(fixed = mean(fixed))
+
+ggplot(plot, aes(x=year, y=d.aic)) + geom_line() + geom_point() + 
+  ylab("Delta-AICc") + xlab("Threshold year") + ggtitle("Chum salmon: timing of change") +
+  theme(legend.position = "top") + geom_hline(data = plot.fixed, aes(yintercept = fixed), lty=2) +
+  facet_wrap(~area, scale="free_y")
+```
+**Fig. 10** Support for timing in the change in SST effects by ecosystem for chum salmon. Delta-AICc scores for random-effects models fit to all runs within each system. Dashed lines indicate delta-AICc values for model invoking stationary SST effects.
+
+Best support in the south is for 1988/89, though there is also support for a change in early 1980s. Interesting results in the EBS, where models invoking a late 1970s or early 1980s change are superior to the fixed model.
+
+Finally, I'll use the chi-squared distribution for multiple p-values to evaluate the overall support for a change in ocean temperature effects in 1988/89, treating each area x species combination as an independent test.
+
+```{r}
+# collect all the p-values
+pp <- c(summary(p.s.mod1)$tTable[4,5], summary(p.g.mod1)$tTable[4,5], summary(p.e.mod1)$tTable[4,5], 
+        summary(s.s.mod1)$tTable[4,5], summary(s.g.mod1)$tTable[4,5], summary(s.e.mod1)$tTable[4,5],
+        summary(c.s.mod1)$tTable[4,5], summary(c.g.mod1)$tTable[4,5], summary(c.e.mod1)$tTable[4,5])
+test <- -2*sum(log(pp))
+print(paste("Overall p-value: ", round(pchisq(test, length(pp)*2, lower.tail=F), 15), sep=""))
+```
+So there is strong overall support for an era difference in ocean temperature effects. 
+
+But of course the change is not consistent across different systems and species. Here is a summary plot to give us the overall picture:
+
+```{r, fig.height=5, fig.width=7, fig.align="center"}
+all.plot <- rbind(p.plot, s.plot, c.plot)
+all.plot$species <- rep(c("Pink", "Sockeye", "Chum"), each=6)
+
+ggplot(all.plot, aes(y=effect, x=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("SST coefficient") + theme(legend.position = "top") + facet_grid(species ~ area, scales="free") + geom_hline(yintercept = 0)
+```
+**Fig. 11** Summary of species x area tests for non-stationary response to SST variability. Error bars = 95% CI.
+
+So, to summarize for each species.
+
+  1) Chum salmon went from a generally positive response to SST prior to 1988/89 to no reponse, or a negative response, after 1988/89.
+  
+  2) Pink salmon also went from a generally positive response to a neutral or negative response.
+  
+  3) Sockeye salmon either always showed a positive response to SST (EBS), went from positive to neutral (GOA), or were always neutral (South).
