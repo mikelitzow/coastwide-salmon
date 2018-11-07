@@ -184,18 +184,18 @@ ggplot(plot, aes(y=effect, x=era)) + geom_bar(position=dodge, stat="identity") +
 Just to make sure that this distance x SST model is the best way to address the evolution of spatial differences through time, we'll ask if that model (mod1) is better than a model invoking ecosystem-specific SST effects in the two eras (mod2), or Alaska and southern area SST effects that differ by era (mod3).
 
 Fixed effects for both models are formulated as:
-  log(recruits) = sst:region*era + # spawners:stock id + offset(log(spawners))
+  log(recruits/spawners) = sstxregion*era + # spawners:stock id + offset(log(spawners))
   
 In model 2, the regions are ecosystems (EBS, GOA, South). In model 3, the regions are Alaska (EBS and GOA combined) and South.
 ```{r}
 # compare the linear distance model (mod1) with models invoking area-specific SST effects by era,
 # either by ecosystem, or AK vs. southern areas
-mod1 <- lme(ln.recr ~ loc.sst:dist*era + full.stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | full.stock, data=pink, 
+mod1 <- lme(log(recruits/spawners) ~ loc.sst:dist*era + full.stock:spawners, 
+            random = ~ 1 + loc.sst | full.stock, data=pink, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 
-mod2 <- lme(ln.recr ~ loc.sst:our.region*era + full.stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | full.stock, data=pink, 
+mod2 <- lme(log(recruits/spawners) ~ loc.sst:our.region*era + full.stock:spawners, 
+            random = ~ 1 + loc.sst | full.stock, data=pink, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 
 pink$ak.south <- NA
@@ -203,8 +203,8 @@ for(i in 1:nrow(pink)){
   ifelse(pink$our.region[i] %in% c("EBS", "GOA"), pink$ak.south[i] <- "AK", pink$ak.south[i] <- "South")
 }
 
-mod3 <- lme(ln.recr ~ loc.sst:ak.south*era + full.stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | full.stock, data=pink, 
+mod3 <- lme(log(recruits/spawners) ~ loc.sst:ak.south*era + full.stock:spawners, 
+            random = ~ 1 + loc.sst | full.stock, data=pink, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 
 AICc(mod1, mod2, mod3)
@@ -224,14 +224,14 @@ AICc.pi <- NA # object to save output
 temp <- filter(pink, our.region=="EBS")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 ebs.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~  1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
   
   AICc.pi[i] <- AICc(mod)
 }
@@ -253,14 +253,14 @@ d.ebs.fixed <- ebs.fixed-min.AIC
 temp <- filter(pink, our.region=="GOA")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 goa.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~  1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
   
   AICc.pi[i] <- AICc(mod)
 }
@@ -282,14 +282,15 @@ d.goa.fixed <- goa.fixed-min.AIC
 temp <- filter(pink, our.region=="South")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+# AICc for fixed model
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 south.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~  1 + loc.sst | full.stock, data=temp, control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
   
   AICc.pi[i] <- AICc(mod)
 }
@@ -324,9 +325,7 @@ ggplot(plot, aes(x=year, y=d.aic)) + geom_line() + geom_point() +
 ```
 **Fig. 4** Support for timing in the change in SST effects y ecosystem. Delta-AICc scores for random-effects models fit to all runs within each system. Dashed lines indicate delta-AICc values for model invoking stationary SST effects.
 
-So the GOA result, as we have seen before, is consistent with a change in SST effects during the late 1980s. The EBS results also show a minimum around the late 1980s, though there is also support for an earlier change, in the late 1970s. The soutern runs seem to show the most different pattern, with the strongest support for a change early, in the late 1970s.
-
-This part of the analysis I think could benefit from a more detailed look. I'm thinking that a run-by-run analysis using GLS (fixed effects) models would be the best way to evaluate the support for different timings. One complicating factor in all this is that there are few years of observation to support analysis of the later candidate thresholds. Many of our time series don't extend beyond 2008 or 2009. Updated time series might be helpful in this context.
+I think we need to address this question with updated time series and a run-by-run modeling approach before getting too deep into interpretation.
 
 -----
 ###Sockeye Salmon
@@ -371,10 +370,10 @@ sock.areas
 Again, we'll look at changing SST effects by ecosystem. First, in the south:
 ```{r}
 
-s.s.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.s.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners , random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-s.s.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.s.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(s.s.mod1, s.s.mod2)
@@ -382,10 +381,10 @@ anova(s.s.mod1, s.s.mod2)
 
 And the GOA:
 ```{r}
-s.g.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.g.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners , random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-s.g.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.g.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(s.g.mod1, s.g.mod2)
@@ -394,10 +393,9 @@ anova(s.g.mod1, s.g.mod2)
 And the EBS.
 ```{r}
 
-s.e.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.e.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
-
-s.e.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+s.e.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=sock[sock$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(s.e.mod1, s.e.mod2)
@@ -417,7 +415,7 @@ s.plot[4,3:5] <- intervals(s.g.mod1, which="fixed")$fixed[2,2] + intervals(s.g.m
 s.plot[5,3:5] <- intervals(s.e.mod1)$fixed[2,]
 s.plot[6,3:5] <- intervals(s.e.mod1)$fixed[2,2] + intervals(s.e.mod1)$fixed[4,]
 
-s.plot$era <- reorder(s.plot$era, order(-s.plot$era))
+s.plot$era <- reorder(s.plot$era, -order(s.plot$era))
 dodge <- position_dodge(width=0.9)
 ggplot(s.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) +
   ggtitle("Sockeye salmon") + xlab("") + ylab("SST coefficient") + theme(legend.position = "top")
@@ -425,10 +423,10 @@ ggplot(s.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat=
 **Fig. 6** Sockeye salmon: ecosystem-specific pre/post 1988/89 SST coefficients from mixed-effects models. Error bars = 95% CI.
 
 The change in SST effects is only significant in the GOA. This plot does suggest that the Alaska-south difference in SST effects only pertains to the pre-1988/89 data. We can test that hypothesis with a mixed-effects model invoking the following fixed effects stucture (model 1):
-  log(recruits) = sst:region*era + # spawners:stock ID + offset(log(spawners))
+  log(recruits/spawners) = era + sst x region x era + # spawners x stock ID
   
 That model is compared with a model invoking a time-invariant AK-south difference (model 2):
-  log(recruits) = sst:region + # spawners:stock ID + offset(log(spawners))
+  log(recruits/spawners) = sst x region + # spawners x stock ID 
 
 Note that in these models "region" refers to either Alaska or the south.
 
@@ -438,19 +436,21 @@ for(i in 1:nrow(sock)){
   ifelse(sock$our.region[i] %in% c("EBS", "GOA"), sock$ak.south[i] <- "AK", sock$ak.south[i] <- "South")
 }
 
-mod1 <- lme(ln.recr ~ loc.sst:ak.south*era + stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | stock, data=sock, 
+mod1 <- lme(log(recruits/spawners) ~ loc.sst:ak.south*era + stock:spawners, 
+            random = ~ 1 + loc.sst | stock, data=sock, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-mod2 <- lme(ln.recr ~ loc.sst:ak.south  + stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | stock, data=sock, 
+mod2 <- lme(log(recruits/spawners) ~ loc.sst:ak.south  + stock:spawners, 
+            random = ~ 1 + loc.sst | stock, data=sock, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(mod1, mod2)
 
 ```
 
-So there isn't support for that hypothesis. The sockeye story seems to be very much a story of changing SST effects in the GOA, and no support for a change in the other ecosystems.
+So there is very strong support for that hypothesis.
+
+Now the timing of changing SST effects in each ecosystem. Again, this is a placeholder until I get to a more detailed analysis using updated time series.
 
 ```{r, fig.height=4, fig.width=7, fig.align="center"}
 
@@ -462,14 +462,14 @@ AICc <- NA # object to save output
 temp <- filter(sock, our.region=="EBS")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 ebs.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
@@ -481,14 +481,14 @@ d.ebs.fixed <- ebs.fixed-min(AICc)
 temp <- filter(sock, our.region=="GOA")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 goa.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
@@ -500,14 +500,14 @@ d.goa.fixed <- goa.fixed-min(AICc)
 temp <- filter(sock, our.region=="South")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 south.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
@@ -533,8 +533,6 @@ ggplot(plot, aes(x=year, y=d.aic)) + geom_line() + geom_point() +
 ```
 
 **Fig. 7** Support for timing in the change in SST effects y ecosystem for sockeye salmon. Delta-AICc scores for random-effects models fit to all runs within each system. Dashed lines indicate delta-AICc values for model invoking stationary SST effects.
-
-So the best timing for the change in the GOA response to SST appears to be later, in the early 1990s. Again, I think this timing analysis could be improved by using updated time series and applying fixed models to each run separately.
 
 -----
 ###Chum Salmon
@@ -579,20 +577,20 @@ chum.areas
 Again, the area-specific test for different sst effects in different eras. The south:
 ```{r}
 
-c.s.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.s.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-c.s.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.s.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(c.s.mod1, c.s.mod2)
 ```
 And GOA:
 ```{r}
-c.g.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.g.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-c.g.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.g.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "GOA",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(c.g.mod1, c.g.mod2)
@@ -601,10 +599,10 @@ anova(c.g.mod1, c.g.mod2)
 And the EBS:
 ```{r}
 
-c.e.mod1 <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.e.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-c.e.mod2 <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, 
+c.e.mod2 <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, 
             data=chum[chum$our.region == "EBS",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(c.e.mod1, c.e.mod2)
@@ -628,7 +626,7 @@ c.plot[4,3:5] <- intervals(c.g.mod1, which="fixed")$fixed[2,2] + intervals(c.g.m
 c.plot[5,3:5] <- intervals(c.e.mod1, which="fixed")$fixed[2,]
 c.plot[6,3:5] <- intervals(c.e.mod1, which="fixed")$fixed[2,2] + intervals(c.e.mod1, which="fixed")$fixed[4,]
 
-c.plot$era <- reorder(c.plot$era, order(-c.plot$era))
+c.plot$era <- reorder(c.plot$era, -order(c.plot$era))
 dodge <- position_dodge(width=0.9)
 ggplot(c.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat="identity") + geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) +
   ggtitle("Chum salmon") + xlab("") + ylab("SST coefficient") + theme(legend.position = "top")
@@ -636,11 +634,10 @@ ggplot(c.plot, aes(y=effect, x=area, fill=era)) + geom_bar(position=dodge, stat=
 **Fig. 9** Era-specific SST effects on chum salmon survival by area.
 
 Again, I'll test for an era-specific difference in AK vs. south area differences in sst effects. The first model treats these as time-dependent (model 1):
-  log(recruits) = sst:region*era + # spawners:stock ID + offset(log(spawners))
+  log(recruits/spawners) = era + sst x region x era + # spawners x stock ID
   
 That model is compared with a model invoking a time-invariant AK-south difference (model 2):
-  log(recruits) = sst:region + # spawners:stock ID + offset(log(spawners))
-
+  log(recruits) = sst x region + # spawners x stock ID 
 
 ```{r}
 chum$ak.south <- NA
@@ -648,12 +645,12 @@ for(i in 1:nrow(chum)){
   ifelse(chum$our.region[i] %in% c("EBS", "GOA"), chum$ak.south[i] <- "AK", chum$ak.south[i] <- "South")
 }
 
-mod1 <- lme(ln.recr ~ loc.sst:ak.south*era + stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | stock, data=chum, 
+mod1 <- lme(log(recruits/spawners) ~ loc.sst:ak.south*era + stock:spawners, 
+            random = ~ 1 + loc.sst | stock, data=chum, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
-mod2 <- lme(ln.recr ~ loc.sst:ak.south  + stock:spawners + offset(log(spawners)), 
-            random = ~ loc.sst | stock, data=chum, 
+mod2 <- lme(log(recruits/spawners) ~ loc.sst:ak.south  + stock:spawners, 
+            random = ~ 1 + loc.sst | stock, data=chum, 
             control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 
 anova(mod1, mod2)
@@ -674,14 +671,14 @@ AICc <- NA # object to save output
 temp <- filter(chum, our.region=="EBS")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 ebs.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
@@ -693,14 +690,14 @@ d.ebs.fixed <- ebs.fixed-min(AICc)
 temp <- filter(chum, our.region=="GOA")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 goa.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
@@ -712,14 +709,14 @@ d.goa.fixed <- goa.fixed-min(AICc)
 temp <- filter(chum, our.region=="South")
 
 # AICc for fixed model
-mod <- lme(ln.recr ~ loc.sst + era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+mod <- lme(log(recruits/spawners) ~ loc.sst + era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
 south.fixed <- AICc(mod)
 
 for(i in 1:length(thr.pi)){
   # i <- 1
   temp$era <- "early"  
   temp$era[temp$entry.yr > thr.pi[i]] <- "late"
-  mod <- lme(ln.recr ~ loc.sst*era + stock:spawners + offset(log(spawners)), random = ~ loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
+  mod <- lme(log(recruits/spawners) ~ loc.sst*era + stock:spawners, random = ~ 1 + loc.sst | stock, data=temp, control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | stock))
   
   AICc[i] <- AICc(mod)
 }
