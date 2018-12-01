@@ -24,7 +24,7 @@ pink.runs <- data.frame(run=as.character(names(end)), start=start, end=end)
 pink.runs <- na.omit(pink.runs) # there isn't any improvement over what we used before
 
 ##########
-# check chum data
+# check chum data!
 chum <- filter(dat, species=="Chum")
 
 # this is a bit verbose, but selects keeper runs!
