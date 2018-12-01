@@ -1,12 +1,13 @@
 ---
-title: "Initial analysis - coastwide salmon"
-author: "Mike Litzow"
+title: "Analysis summary - coastwide salmon"
 output:
   pdf_document: default
   word_document: default
   html_document: default
 ---
-This is a first summary of analysis to test the hypothesis of changing relationships between salmon survival (recruits per spawner) and ocean temperature, over the entire range of North American spawning populations. The covariate in analysis is SST within 500 km of ocean entry over the months found to show significant relationships to survival by Mueter et al. (2005).
+This is an updated summary of analysis to test the hypothesis of changing relationships between salmon survival (recruits per spawner) and ocean temperature, over the entire range of North American spawning populations. The covariate in analysis is SST within 500 km of ocean entry over the months found to show significant relationships to survival by Mueter et al. (2005).
+
+The big difference from the previous iteration is that, based on conversation with Curry Cunningham, I have dropped the offset models, and am using log(recruits/spawner) as the response variable. The advantages of this change are 1) that it aligns with the cultural norm for analysis in the salmon world, is consistent with the literature, etc.; 2) allows results to be interpreted in terms of changes in survival vs. change in units of ºC, rather than changes in cohort size, which can't so easily be compared among runs. 
 
 The hypothesis of non-stationary SST-survival relationships is supported by previous results focused only on the GOA. This completed work identified changing variance in the Aleutian Low as a mechanism contributing to nonstationary SST-survival relationships in the GOA. The basin-scale importance of the Aleutian Low for North Pacific ecosystem dynamics suggests that similar dynamics might exist in other North American populations, i.e., in the Bering Sea, and areas south of the Gulf of Alaska (British Columbia, Washington).
 
@@ -18,7 +19,7 @@ The approach here is to:
 
 3) Use a model selection approach to evaluate 1988/89 as the best change point for SST-survival relationships.
 
-Following our previous paper and the approach of Mueter et al. 2002 CJFAS, we will use mixed effects models treating individual runs as random effects and spawner abundance as a population-specific fixed effect, and we will model each of the three species (pink, sockeye, chum) separately. Based on Bethany's earlier work, and our work on the GOA, we'll use run-specific intercepts and SST terms as the random effects in all models. We will also use an offset ln(spawners) fixed effect to avoid having the # of spawners as a term on both sides of the Ricker model equation. All models include first-order autocorrelation error structure.
+Following our previous paper and the approach of Mueter et al. 2002 CJFAS, we will use mixed effects models treating individual runs as random effects and spawner abundance as a population-specific fixed effect, and we will model each of the three species (pink, sockeye, chum) separately. Based on Bethany's earlier work, and our work on the GOA, we'll use run-specific intercepts and SST terms as the random effects in all models. All models include first-order autocorrelation error structure.
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.align = "left")
 library(nlme)
@@ -30,6 +31,16 @@ library(MuMIn)
 library(gtools)
 options(max.print = 99999)
 ```
+###Data update
+Plugging in new data provided by Curry Cunningham.
+```{r, include=F}
+
+
+
+```
+
+
+
 ###Pink Salmon
 Begin with pink salmon. These are the runs we have to work with.
 ```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
@@ -73,13 +84,18 @@ Start by testing for changing relationships with SST pre/post 1988/89 in each sy
 
 I'll illustrate the code with southern region data. Approach is to compare the model with and without an era interaction term using the likelihood ratio test.
 
+Model 1 includes non-stationary SST effects:
+
+log(recruits/spawners) = A + B1 x SST + B2 x era + B3 x SST x era + B4i x spawners + ai + bi x SST + e
+
+Where A is the fixed effect intercept; B1, B2, and B3 are the fixed effect coefficients for SST, era, and the SST x era interaction, respectively, B4 is the fixed coefficient for density dependence, estimated separately for each run, ai is the random intercept, reflecting run-specific productivity,  bi is the random sst coefficient, reflecting the run-specific response to SST variability, and e is the error term, which is formulated as a first-order autocorrelation process for each run.
+
+Model 2 allows survival to vary between eras, but invokes a stationary response to SST:
+
+log(recruits/spawners) = A + B1 x SST + B2 x era + B4i x spawners + ai + bi x SST + e
+
+
 ```{r, echo=T}
-# 
-# p.s.mod1 <- lme(ln.recr ~ loc.sst*era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, 
-#             data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
-# 
-# p.s.mod2 <- lme(ln.recr ~ loc.sst + era + full.stock:spawners + offset(log(spawners)), random = ~ loc.sst | full.stock, 
-#             data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
 
 p.s.mod1 <- lme(log(recruits/spawners) ~ loc.sst*era + full.stock:spawners, random = ~ 1 + loc.sst | full.stock, 
             data=pink[pink$our.region == "South",], control=lmeControl(opt="optim"), method="ML", correlation=corAR1(form= ~ 1 | full.stock))
@@ -184,7 +200,7 @@ ggplot(plot, aes(y=effect, x=era)) + geom_bar(position=dodge, stat="identity") +
 Just to make sure that this distance x SST model is the best way to address the evolution of spatial differences through time, we'll ask if that model (mod1) is better than a model invoking ecosystem-specific SST effects in the two eras (mod2), or Alaska and southern area SST effects that differ by era (mod3).
 
 Fixed effects for both models are formulated as:
-  log(recruits/spawners) = sstxregion*era + # spawners:stock id + offset(log(spawners))
+  log(recruits/spawners) = sstxregion*era + # spawners:stock id
   
 In model 2, the regions are ecosystems (EBS, GOA, South). In model 3, the regions are Alaska (EBS and GOA combined) and South.
 ```{r}
@@ -770,6 +786,14 @@ So, to summarize for each species.
 
   1) Chum salmon went from a generally positive response to SST prior to 1988/89 to no reponse, or a negative response, after 1988/89.
   
-  2) Pink salmon also went from a generally positive response to a neutral or negative response.
+  2) Pink salmon also went from a generally positive response to a neutral or negative response in the South and GOA, showed a similar response in the two eras in the EBS.
   
-  3) Sockeye salmon either always showed a positive response to SST (EBS), went from positive to neutral (GOA), or were always neutral (South).
+  3) Sockeye salmon either always showed a positive response to SST (EBS), went from positive to neutral (GOA), or went from negative to neutral (South).
+
+And to summarize by era.
+
+  1) Salmon in the EBS show a positive or neutral response to SST that is consistent across eras.
+  
+  2) Salmon in the GOA went from positive to neutral responses.
+  
+  3) Salmon in the South switched the sign of response (chum), show weak responses throughout (pink), or show a response that cannot be distinguished between eras (sockeye).

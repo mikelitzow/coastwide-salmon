@@ -205,7 +205,7 @@ AICc(mod1, mod2, mod3)
 
 So, yes, the distance x sst model (mod1) appears to be the best way to address that question.
 
-Finally, for pink salmon, we'll assess the evidence for a change in SST effects in 1988/89 vs. other change points. We'll use runs from each ecosystem showing a significant change in SST effects (i.e., all three systems for this species). We'll fit candidate models to each run separately that invoke different change points, and we'll evaluate the overall support for different possible timing of a changing SST-survival relationship by averaging delta-AICc scores across runs.
+Finally, for pink salmon, we'll assess the support for a change in SST effects in 1988/89 vs. other change points. For each ecosystem, we'll fit candidate models that invoke different change points, and we'll evaluate the overall support for different possible timings of changing SST-survival relationships by comparing delta-AICc scores.
 
 ```{r, fig.height=4, fig.width=7, fig.align="center"}
 
