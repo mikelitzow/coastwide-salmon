@@ -1,0 +1,169 @@
+---
+title: "Salmon SR time series QA/QC"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+Examining population locations and time series for each species.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.align = "left")
+library(nlme)
+library(dplyr)
+library(maps)
+library(mapdata)
+library(ggplot2)
+library(MuMIn)
+library(gtools)
+library(tidyr)
+options(max.print = 99999)
+```
+
+###Pink Salmon
+Begin with pink salmon. These are the runs we have to work with.
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the pink salmon data!
+
+pink <- read.csv("pink.data.csv") 
+
+pink.runs <- pink %>%
+  group_by(stock) %>%
+  summarise(stock.id = mean(stock.id), lat=mean(lat), long=mean(360-long))
+
+plot(pink.runs$long, pink.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(pink.runs$long, pink.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+**Fig. 1** Pink salmon run locations.
+
+When runs are separated into even and odd populations, we have 6 runs for the EBS, 20 for the GOA, and 9 for southern areas. Start and end years refer to brood year.
+```{r}
+pink.areas <- pink %>%
+  group_by(full.stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(brood.yr), end.year=max(brood.yr))
+
+change <- pink.areas$area==1 
+pink.areas$area[change] <- "Bering Sea"
+
+change <- pink.areas$area==2 
+pink.areas$area[change] <- "Gulf of Alaska"
+
+change <- pink.areas$area==3 
+pink.areas$area[change] <- "South"
+
+pink.areas <- as.data.frame(pink.areas)
+pink.areas <- arrange(pink.areas, area)
+pink.areas
+```
+
+And the recruits / spawner time series for each.
+```{r, fig.height=10, fig.width=7.5}
+pink$rps <- pink$recruits/pink$spawners
+
+pink.rps <- pink %>%
+  select(full.stock, brood.yr, rps) 
+  
+ggplot(pink.rps, aes(brood.yr,rps)) + geom_line() + geom_point() + facet_wrap(~full.stock, scales="free_y", nrow=8) 
+  
+```
+
+###Sockeye salmon
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the pink salmon data!
+
+sock <- read.csv("updated.sockeye.data.csv") # updates from Curry
+
+sock.runs <- sock %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+plot(sock.runs$long, sock.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(sock.runs$long, sock.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+
+Duration of sockeye runs.
+```{r}
+sock.areas <- sock %>%
+  group_by(stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(brood.yr), end.year=max(brood.yr))
+
+change <- sock.areas$area==1 
+sock.areas$area[change] <- "Bering Sea"
+
+change <- sock.areas$area==2 
+sock.areas$area[change] <- "Gulf of Alaska"
+
+change <- sock.areas$area==3 
+sock.areas$area[change] <- "South"
+
+sock.areas <- as.data.frame(sock.areas)
+sock.areas <- arrange(sock.areas, area)
+sock.areas
+```
+
+And the recruits / spawner time series for each.
+```{r, fig.height=10, fig.width=7.5}
+sock$rps <- sock$recruits/sock$spawners
+
+sock.rps <- sock %>%
+  select(stock, brood.yr, rps) 
+  
+ggplot(sock.rps, aes(brood.yr,rps)) + geom_line() + geom_point() + facet_wrap(~stock, scales="free_y", nrow=8) 
+  
+```
+
+###Chum salmon
+```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
+# load the chum salmon data!
+
+chum <- read.csv("chum.data.csv") 
+
+chum.runs <- chum %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+plot(chum.runs$long, chum.runs$lat, type="n", ylab="N latitude", xlab="E longitude")
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(chum.runs$long, chum.runs$lat, pch=21, bg ="red", cex=1)
+
+```
+
+And the table of runs. Only 3 available for the EBS. Note also that the Southern runs end in 2006, so will likely be helpful if we can update these.
+
+```{r}
+chum.areas <- chum %>%
+  group_by(stock) %>% 
+  summarise(area=mean(as.numeric(our.region)), start.year=min(entry.yr), end.year=max(entry.yr))
+
+change <- chum.areas$area==1 
+chum.areas$area[change] <- "Bering Sea"
+
+change <- chum.areas$area==2 
+chum.areas$area[change] <- "Gulf of Alaska"
+
+change <- chum.areas$area==3 
+chum.areas$area[change] <- "South"
+
+chum.areas <- as.data.frame(chum.areas)
+chum.areas <- arrange(chum.areas, area)
+chum.areas
+```
+
+And the recruits / spawner time series for each.
+```{r, fig.height=10, fig.width=7.5}
+chum$rps <- chum$recruits/chum$spawners
+
+chum.rps <- chum %>%
+  select(stock, brood.yr, rps) 
+  
+ggplot(chum.rps, aes(brood.yr,rps)) + geom_line() + geom_point() + facet_wrap(~stock, scales="free_y", nrow=8) 
+  
+```
