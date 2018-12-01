@@ -1,4 +1,4 @@
-setwd("/Users/MikeLitzow/Documents/R/NSF-GOA")
+
 require(gplots)
 require(nlme)
 require(scales) 
