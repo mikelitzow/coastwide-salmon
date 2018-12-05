@@ -56,9 +56,10 @@ sock <- sock[sock$stock %in% sock.use$run,]
 # and... drop the runs that Rich Brenner identified as hatchery subsidized,
 # as well as the combined Chignik
 unique(sock$stock)
-drop <- c("Coghill", "Eshamy", "Copper")
+ drop <- c("Coghill", "Eshamy", "Copper")
 sockeye.use <- sockeye.use[!sockeye.use$run %in% drop,]
 sockeye <- sock[sock$stock %in% sockeye.use$run,]
+unique(sockeye$stock)
 
 # rename some columns
 colnames(sockeye)[7:9] <- c("brood.yr", "spawners", "recruits")
@@ -88,6 +89,7 @@ change <- grep("L.Upper Station", info$stock)
 info$stock[change] <- "L. Upper Station"
 change <- grep("Lake Washington", info$stock)
 info$stock[change] <- "Washington"
+
 
 colnames(sockeye)
 
@@ -533,8 +535,8 @@ S.mo.l1 <- c("Jan", "Mar", "Apr", "May")
 S.mo.l2 <- c("Jan", "Mar", "Apr")
 
 sockeye.locations$region2 <- "AK"
-south <- c(3,5,7,9,11,12,13,19,20,23:28,31,32)
-sockeye.locations$region2[south] <- "South"
+
+sockeye.locations$region2[sockeye.locations$lat < 52] <- "South"
 
 # now we need to go through and select the proper months to make a local sst time series!!
 stocks <- unique(sockeye$stock)
@@ -659,6 +661,8 @@ dev.off()
 # these look right to me!
 
 # save sockeye data
+# drop hatchery-affected runs
+
 write.csv(sockeye,"updated.sockeye.data.csv")
 
 ######################################

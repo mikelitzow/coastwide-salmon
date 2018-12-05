@@ -73,9 +73,16 @@ ggplot(pink.rps, aes(brood.yr,rps)) + geom_line() + geom_point() + facet_wrap(~f
 
 ###Sockeye salmon
 ```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
-# load the pink salmon data!
 
-sock <- read.csv("updated.sockeye.data.csv") # updates from Curry
+
+sock <- read.csv("updated.sockeye.data.csv", row.names=1) # updates from Curry
+
+# need to add in Russian River!
+old <- read.csv("sockeye.data.csv")
+old <- filter(old, stock=="Russian R.")
+add <- data.frame(X=NA, stock.id=NA, species="Sockeye", stock="Russian R.", region="GOA", sub.region="GOA", brood.yr = old$brood.yr, spawners=old$spawners, recruits=old$recruits,  entry.yr=old$entry.yr, ln.rs=old$ln.rs, long=old$long, lat=old$lat, loc.sst=old$loc.sst, our.region="GOA")
+
+sock <- rbind(sock, add)
 
 sock.runs <- sock %>%
   group_by(stock) %>%
@@ -118,6 +125,131 @@ sock.rps <- sock %>%
 ggplot(sock.rps, aes(brood.yr,rps)) + geom_line() + geom_point() + facet_wrap(~stock, scales="free_y", nrow=8) 
   
 ```
+
+Now make some extra comparisons between this new version and the old version.
+
+The # of stocks for the southern area differs between data versions, so I'll begin by calculating correlations for ln(rps) between the versions to see if any are identified by different names in the two versions.
+```{r}
+# reload old version of data
+old <- read.csv("sockeye.data.csv")
+
+old <- old %>%
+  select(our.region, stock, brood.yr, spawners, recruits, loc.sst) %>%
+  mutate(rps = recruits/spawners, version="old") %>%
+  arrange(our.region, stock)
+
+# summarise new data
+new <- sock %>% 
+  select(our.region, stock, brood.yr, spawners, recruits, loc.sst, rps) %>%
+  mutate(version="new") %>%
+  arrange(our.region, stock)
+
+# align GOA stock names
+old$stock <- as.character(old$stock)
+
+change <- grep("E.U", old$stock)
+old$stock[change] <- "E. Upper Station"
+
+change <- grep("L.U", old$stock)
+old$stock[change] <- "L. Upper Station"
+
+change <- grep("Chig", old$stock)
+old$stock[change] <- "Chignik Lake"
+
+change <- grep("Black", old$stock)
+old$stock[change] <- "Black Lake"
+
+# align Southern stock names
+new$stock <- as.character(new$stock)
+
+change <- grep("E.St", new$stock)
+new$stock[change] <- "E. Stuart"
+
+change <- grep("L.St", new$stock)
+new$stock[change] <- "L. Stuart"
+
+change <- grep("L.Sh", new$stock)
+new$stock[change] <- "L. Shuswap"
+
+# now compare stock names for the southern area!
+south.old <- old %>%
+  filter(our.region=="South") %>%
+  select(stock, brood.yr, rps) %>%
+  mutate(rps=log(rps)) %>% # changing to log rps
+  spread(stock, rps)
+
+south.new <- new %>%
+  filter(our.region=="South") %>%
+  select(stock, brood.yr, rps) %>%
+  mutate(rps=log(rps)) %>% # changing to log rps
+  spread(stock, rps) %>%
+  filter(brood.yr %in% south.old$brood.yr)
+
+# and there is one bad observation in the new data (Washington 1967)
+what <- south.new==-Inf
+south.new[what] <- NA
+cor(select(south.old, -brood.yr), select(south.new, -brood.yr), use="p")
+
+# so Francois in the old data appears to be Stellako in the new (r ~ 1)
+# change the old name to be consistent
+change <- grep("Franco", old$stock)
+old$stock[change] <- "Stellako"
+
+# and combine
+old.new <- rbind(old, new)
+```
+
+Francois in the old data appears to be Stellako in the new (r ~ 1). I'll call both runs "Stellako".
+
+
+OK, now start with EBS - plot recruits per spawner time series and sst at ocean entry for each run.
+```{r}
+ggplot(filter(old.new, our.region=="EBS"), aes(brood.yr, rps, color=version)) + geom_line() +
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("recruits per spawner")
+
+ggplot(filter(old.new, our.region=="EBS"), aes(brood.yr, loc.sst, color=version)) + geom_line() +
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("sst at ocean entry (std. anomaly)")
+```
+
+Nushagak has one outlier RPS value in the old version that is absent from the new.
+Togiak slightly different between versions, but not in a substantial way.
+SST time series differ between the versions. Appears that there may be an offset in time for some of these - need to check that.
+
+The same plots for GOA.
+```{r}
+ggplot(filter(old.new, our.region=="GOA"), aes(brood.yr, rps, color=version)) + geom_line() +
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("recruits per spawner")
+
+ggplot(filter(old.new, our.region=="GOA"), aes(brood.yr, loc.sst, color=version)) + geom_line() +
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("sst at ocean entry (std. anomaly)")
+```
+
+The RPS time series agree well. Offsets for Kenai, but that doesn't appear meaningful for analysis. Note that Russian R. only included in the old version. Again some differences in sst time series, and they may be offset in time. Need to figure that out.
+
+Finally, southern stocks.
+```{r}
+ggplot(filter(old.new, our.region=="South"), aes(brood.yr, rps, color=version)) + geom_line() + 
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("recruits per spawner")
+
+ggplot(filter(old.new, our.region=="South"), aes(brood.yr, loc.sst, color=version)) + geom_line() +
+         facet_wrap(~stock, scale="free_y") + theme(legend.position = "top") + ylab("sst at ocean entry (std. anomaly)")
+```
+
+Big issues here with the RPS time series. All of the very high values appear to have been removed from the new data!
+
+```{r}
+
+```
+
+
+
+
+```{r}
+southern.stocks <- 
+  
+  rbind(unique(old$stock[old$our.region=="South"]), unique(new$stock[new$our.region=="South"]))
+```
+
 
 ###Chum salmon
 ```{r, fig.height=3.8, fig.width=4.5, fig.align='center'}
