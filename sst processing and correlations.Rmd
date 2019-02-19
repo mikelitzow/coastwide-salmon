@@ -1,0 +1,2021 @@
+---
+title: "Nonstationary SST-salmon correlations"
+author: "Mike Litzow"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE, fig.align = "left")
+library(maps)
+library(mapdata)
+library(fields)
+library(MuMIn)
+library(tidyr)
+library(ncdf4)
+library(chron)
+library(nlme)
+library(ggplot2)
+library(dplyr)
+options(max.print = 99999)
+```
+
+First, download ERSST v5 data and process. Data are being downloaded on 1/11/19. 44º-68ºN, 186º-236ºE, 1/1950-11/2018.
+
+```{r}
+# download.file("https://coastwatch.pfeg.noaa.gov/erddap/griddap/nceiErsstv5.nc?sst[(1950-01-01):1:(2018-11-01T00:00:00Z)][(0.0):1:(0.0)][(44):1:(68)][(186):1:(236)]", "~all.sst")
+# uncomment that line to download the data
+
+nc <- nc_open("~all.sst")
+
+# get lat/long
+x <- ncvar_get(nc, "longitude")
+y <- ncvar_get(nc, "latitude")
+lat <- rep(y, length(x))   # Vector of latitudes
+lon <- rep(x, each = length(y))   # Vector of longitudes
+
+# assign dates
+raw <- ncvar_get(nc, "time") # seconds since January 1, 1970
+h <- raw/(24*60*60)
+d <- dates(h, origin = c(1,1,1970))
+
+# save month and year for processing later
+m <- months(d)
+yr <- years(d)
+
+# get required sst data
+SST <- ncvar_get(nc, "sst")
+
+# need to change to matrix for easier use
+SST <- aperm(SST, 3:1) # transpose array
+
+SST <- matrix(SST, nrow=dim(SST)[1], ncol=prod(dim(SST)[2:3]))  # Change to matrix
+
+# set names
+dimnames(SST) <- list(as.character(d), paste("N", lat, "E", lon, sep=""))
+
+# choose coastal stations - cells touching land, excluding the Aleutians
+# note that 56N200E is excluded b/c it straddles the GOA and EBS and so can't be assigned
+# exclusively to either system
+#  coast <- c("N68E196", "N68E194", "N66E194", "N66E192", "N64E200", "N64E198", "N64E196",
+#            "N64E194", "N62E194", "N60E194", "N60E196", "N60E198", "N58E202", "N58E200",
+#            "N58E198", "N56E198", "N56E196",
+#            "N52E228", "N52E230", "N52E232", "N54E196", 
+#              "N54E198", "N54E200","N54E226", "N54E228", "N54E230", "N56E202", "N56E204", 
+#              "N56E206", "N56E224", "N56E226", "N56E228", "N58E204", "N58E206", "N58E208", 
+#              "N58E222", "N58E224", "N58E226", "N60E208", "N60E210", "N60E212", "N60E214", 
+#              "N60E216", "N60E218", "N60E220", "N50E232", "N50E234", "N50E236" ,"N48E236",
+#            "N48E234", "N46E236", "N44E236")
+
+# dropping cells north of 60º as they seem to throw things off...
+coast <- c("N60E194", "N60E196", "N60E198", "N58E202", "N58E200",
+           "N58E198", "N56E198", "N56E196",
+           "N52E228", "N52E230", "N52E232", "N54E196", 
+             "N54E198", "N54E200","N54E226", "N54E228", "N54E230", "N56E202", "N56E204", 
+             "N56E206", "N56E224", "N56E226", "N56E228", "N58E204", "N58E206", "N58E208", 
+             "N58E222", "N58E224", "N58E226", "N60E208", "N60E210", "N60E212", "N60E214", 
+             "N60E216", "N60E218", "N60E220", "N50E232", "N50E234", "N50E236" ,"N48E236",
+           "N48E234", "N46E236", "N44E236")
+
+coast.sst <- SST
+keep <- colnames(SST) %in% coast
+coast.sst[,!keep] <- NA # blank out all non-coastal cells in the data
+
+# plot mean temperature pattern to check
+coast.mean <- colMeans(coast.sst)
+z <- t(matrix(coast.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image(x,y,z, col=tim.colors(64), xlim=c(170,240), ylim=c(42,65))
+#contour(x, y, z, add=T)  
+map('world2Hires',fill=F,xlim=c(130,250), ylim=c(20,72),add=T, lwd=2)
+
+# drop all non-coastal cells from the data!
+coast.sst <- coast.sst[,keep]
+# now get anomalies (difference from overall monthly mean) for each cell
+# create two functions for processing data
+# and set a couple functions for standardizing below
+f1 <- function(x) tapply(x, m, mean)
+f2 <- function(x) tapply(x, m, sd)
+
+mu <- apply(coast.sst, 2, f1)	# Compute monthly means for each time series (location)
+mu <- mu[rep(1:12, floor(length(d)/12)),]  # Replicate means matrix for each year at each location 
+
+#now need to account for trailing months (i.e., fractions of a year that are available with updated data)
+add <- length(d)-12*floor(length(d)/12)
+
+# add in additional required months
+mu <- rbind(mu, mu[1:add,])
+
+std <- apply(coast.sst, 2, f2)	# Compute monthly sd for each time series (location)
+# and stack as for mu
+std <- std[rep(1:12, floor(length(d)/12)),] 
+# add in additional required months
+std <- rbind(std, std[1:add,])
+
+# now calculate anomalies...
+coast.anom <- (coast.sst - mu)/std # standardized as mean 0, unit variance
+
+```
+
+Now that the coastal cells are organized and anomalies calculated, compare decorrelation scales for 1950-1988, 1989-2013, and 2014-2018.
+
+```{r}
+coast.cells <- data.frame(lat=lat[keep], long=360-lon[keep], cell=colnames(coast.anom)) # changing longitude to ºW
+
+# calculate great-circle distances
+cell.dist <- rdist.earth(coast.cells[,2:1], miles = F)
+rownames(cell.dist) <- colnames(cell.dist) <- coast.cells$cell
+
+# now get correlations for all three eras, for Jan, Apr, Jul, and Oct
+# era 1
+use <- yr %in% 1950:1988 & m == "Jan"
+cor1.jan <- cor(coast.anom[use,])
+
+use <- yr %in% 1950:1988 & m == "Apr"
+cor1.apr <- cor(coast.anom[use,])
+
+use <- yr %in% 1950:1988 & m == "Jul"
+cor1.jul <- cor(coast.anom[use,])
+
+use <- yr %in% 1950:1988 & m == "Oct"
+cor1.oct <- cor(coast.anom[use,])
+
+# era 2
+use <- yr %in% 1989:2013 & m == "Jan"
+cor2.jan <- cor(coast.anom[use,])
+
+use <- yr %in% 1989:2013 & m == "Apr"
+cor2.apr <- cor(coast.anom[use,])
+
+use <- yr %in% 1989:2013 & m == "Jul"
+cor2.jul <- cor(coast.anom[use,])
+
+use <- yr %in% 1989:2013 & m == "Oct"
+cor2.oct <- cor(coast.anom[use,])
+
+# era 3
+use <- yr %in% 2014:2018 & m == "Jan"
+cor3.jan <- cor(coast.anom[use,])
+
+use <- yr %in% 2014:2018 & m == "Apr"
+cor3.apr <- cor(coast.anom[use,])
+
+use <- yr %in% 2014:2018 & m == "Jul"
+cor3.jul <- cor(coast.anom[use,])
+
+use <- yr %in% 2014:2018 & m == "Oct"
+cor3.oct <- cor(coast.anom[use,])
+
+# combine and plot
+f3 <- function(x) as.vector(x[lower.tri(cell.dist)])
+cor.plot <- data.frame(correlation=c(f3(cor1.jan), f3(cor1.apr), f3(cor1.jul), f3(cor1.oct), f3(cor2.jan), f3(cor2.apr), f3(cor2.jul), f3(cor2.oct),
+                                     f3(cor3.jan), f3(cor3.apr), f3(cor3.jul), f3(cor3.oct)), distance=f3(cell.dist),
+                       month=rep(c("January", "April", "July", "October"), each=sum(lower.tri(cell.dist))), era=rep(c("1950-1988", "1989-2013", "2014-2018"), each=4*sum(lower.tri(cell.dist))))
+
+ggplot(cor.plot, aes(distance, correlation)) + geom_point(alpha=0.1) + geom_smooth(se=F, method="gam", formula = y ~ s(x, bs = "cs")) + facet_grid(era~month, scales="free_y") +
+  geom_hline(yintercept = 0.5, lty=2)
+
+```
+
+Now look at ocean entry correlations.
+
+```{r}
+
+ coast <- c("N68E196", "N68E194", "N66E194", "N66E192", "N64E200", "N64E198", "N64E196",
+           "N64E194", "N62E194", "N60E194", "N60E196", "N60E198", "N58E202", "N58E200",
+           "N58E198", "N56E198", "N56E196",
+           "N52E228", "N52E230", "N52E232", "N54E196",
+             "N54E198", "N54E200","N54E226", "N54E228", "N54E230", "N56E202", "N56E204",
+             "N56E206", "N56E224", "N56E226", "N56E228", "N58E204", "N58E206", "N58E208",
+             "N58E222", "N58E224", "N58E226", "N60E208", "N60E210", "N60E212", "N60E214",
+             "N60E216", "N60E218", "N60E220", "N50E232", "N50E234", "N50E236" ,"N48E236",
+           "N48E234", "N46E236", "N44E236")
+
+coast.sst <- SST
+keep <- colnames(SST) %in% coast
+coast.sst[,!keep] <- NA # blank out all non-coastal cells in the data
+
+# plot mean temperature pattern to check
+coast.mean <- colMeans(coast.sst)
+z <- t(matrix(coast.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image(x,y,z, col=tim.colors(64), xlim=c(170,240), ylim=c(42,70))
+#contour(x, y, z, add=T)  
+map('world2Hires',fill=F,xlim=c(130,250), ylim=c(20,72),add=T, lwd=2)
+
+#######
+# quick aside - make a study site fig.
+# load salmon data!
+pink <- read.csv("pink.data.csv")
+sock <- read.csv("sockeye.data.csv")
+chum <- read.csv("chum.data.csv")
+
+pink.runs <- pink %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+sock.runs <- sock %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+chum.runs <- chum %>%
+  group_by(stock) %>%
+  summarise(lat=mean(lat), long=mean(360-long))
+
+png("study site.png", 6,6, units="in", res=300)
+par(mfrow=c(2,2), mar=c(0.5,0.5,1.5,1), las=1)
+
+plot(pink.runs$long, pink.runs$lat, type="n", ylab="", xlab="", yaxt="n", xaxt="n", ylim=c(46,67), xlim=c(192,238))
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(pink.runs$long, pink.runs$lat, pch=21, bg ="red", cex=1.3)
+mtext("a) Pink", adj=0)
+
+plot(sock.runs$long, sock.runs$lat, type="n", ylab="", xlab="", yaxt="n", xaxt="n", ylim=c(46,67), xlim=c(192,238))
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(sock.runs$long, sock.runs$lat, pch=21, bg ="red", cex=1.3)
+mtext("b) Sockeye", adj=0)
+
+plot(chum.runs$long, chum.runs$lat, type="n", ylab="", xlab="", yaxt="n", xaxt="n", ylim=c(46,67), xlim=c(192,238))
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(chum.runs$long, chum.runs$lat, pch=21, bg ="red", cex=1.3)
+mtext("c) Chum", adj=0)
+
+z <- t(matrix(coast.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image.plot(x,y,z, col=tim.colors(64), xlim=c(188,240), ylim=c(42,70), xaxt="n", yaxt="n")
+
+# make grid for cells used
+plot.lat <- lat[keep]
+plot.long <- lon[keep]
+
+for(i in 1:length(plot.lat)){
+  xgrid <- c(plot.long[i]-1, plot.long[i]+1, plot.long[i]+1, plot.long[i]-1, plot.long[i]-1)
+  ygrid <- c(plot.lat[i]+1, plot.lat[i]+1, plot.lat[i]-1, plot.lat[i]-1, plot.lat[i]+1)
+  lines(xgrid, ygrid, lwd=0.5)
+}
+
+
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'ussr',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+mtext("d) SST data", adj=0)
+
+dev.off()
+
+
+# drop all non-coastal cells from the data!
+coast.sst <- coast.sst[,keep]
+
+# get anomalies (difference from overall monthly mean) for each cell
+mu <- apply(coast.sst, 2, f1)	# Compute monthly means for each time series (location)
+mu <- mu[rep(1:12, floor(length(d)/12)),]  # Replicate means matrix for each year at each location 
+
+#now need to account for trailing months (i.e., fractions of a year that are available with updated data)
+add <- length(d)-12*floor(length(d)/12)
+
+# add in additional required months
+mu <- rbind(mu, mu[1:add,])
+
+std <- apply(coast.sst, 2, f2)	# Compute monthly sd for each time series (location)
+# and stack as for mu
+std <- std[rep(1:12, floor(length(d)/12)),] 
+# add in additional required months
+std <- rbind(std, std[1:add,])
+
+# now calculate anomalies...
+coast.anom <- (coast.sst - mu)/std # difference from seasonal mean as SD!
+
+# now assign each run to a set of coastal cells
+# let's get an object with the lat and long for each cell!
+
+coast.cells <- data.frame(cell=colnames(coast.sst), lat=lat[keep], long=lon[keep])
+str(coast.cells)
+
+# add EBS/GOA factor!
+coast.cells$region <- "GOA"
+change <- coast.cells$lat >= 57 & coast.cells$long <=202
+coast.cells$region[change] <- "EBS"
+
+change <- coast.cells$lat == 56 & coast.cells$long <=200
+coast.cells$region[change] <- "EBS"
+
+# and check!
+EBS.coast.cells <- coast.cells$cell[coast.cells$region=="EBS"]
+
+EBS.coast.sst <- SST
+
+use <- colnames(EBS.coast.sst) %in% EBS.coast.cells
+EBS.coast.sst[,!use] <- NA
+# plot mean temperature pattern to check
+coast.mean <- colMeans(EBS.coast.sst)
+z <- t(matrix(coast.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image(x,y,z, col=tim.colors(64), xlim=c(160,240), ylim=c(44,70))
+#contour(x, y, z, add=T)  
+map('world2Hires',fill=F,xlim=c(130,250), ylim=c(20,72),add=T, lwd=2)
+
+# looks good!
+# now select GOA coastal cells
+GOA.coast.cells <- coast.cells$cell[coast.cells$region=="GOA"]
+
+GOA.coast.sst <- SST
+
+use <- colnames(GOA.coast.sst) %in% GOA.coast.cells
+GOA.coast.sst[,!use] <- NA
+# plot mean temperature pattern to check
+coast.mean <- colMeans(GOA.coast.sst)
+z <- t(matrix(coast.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image(x,y,z, col=tim.colors(64), xlim=c(160,240), ylim=c(44,70))
+#contour(x, y, z, add=T)  
+map('world2Hires',fill=F,xlim=c(130,250), ylim=c(20,72),add=T, lwd=2)
+# looks good!
+
+# now need an object with the lat longs of each run!
+
+# simplify the three SR time series
+
+pink <- pink %>%
+  select(species, full.stock, brood.yr, spawners, recruits, lat, long, our.region)
+names(pink)[2] <- "stock"
+
+chum <- chum %>%
+  select(species, stock, brood.yr, spawners, recruits, lat, long, our.region)
+
+sock$species <- "Sockeye"
+sock <- sock %>%
+  select(species, stock, brood.yr, spawners, recruits, lat, long, our.region)
+
+run.dat <- rbind(pink, chum, sock) %>%
+  filter(brood.yr >= 1960) # limit to 1960 and later 
+
+names(run.dat)[8] <- "region"
+
+pink.cells <- data.frame(species="Pink", stock=names(tapply(pink$lat, pink$stock, mean)), lat=tapply(pink$lat, pink$stock, mean), 
+                         long=tapply(pink$long, pink$stock, mean), cells=NA)
+
+sock.cells <- data.frame(species="Sockeye", stock=names(tapply(sock$lat, sock$stock, mean)), lat=tapply(sock$lat, sock$stock, mean), 
+                         long=tapply(sock$long, sock$stock, mean), cells=NA)
+
+chum.cells <- data.frame(species="Chum", stock=names(tapply(chum$lat, chum$stock, mean)), lat=tapply(chum$lat, chum$stock, mean), 
+                         long=tapply(chum$long, chum$stock, mean), cells=NA)
+
+run.cells <- rbind(pink.cells, sock.cells, chum.cells)
+rownames(run.cells) <- 1:nrow(run.cells)
+
+# quickly add region
+run.cells$region <- NA
+
+for(i in 1:nrow(run.cells)){
+ # i <- 1
+run.cells$region[i] <- as.character(run.dat$region[run.dat$species==run.cells$species[i] & run.dat$stock==run.cells$stock[i]])
+  
+}
+
+# change coast.cells long back to degrees W!
+coast.cells$long <- 360-coast.cells$long
+
+# get cells <= 400 km away for ebs runs...
+ebs.x1 <- as.matrix(cbind(run.cells$long[run.cells$region=="EBS"], 
+                          run.cells$lat[run.cells$region=="EBS"]))
+ebs.x2 <- as.matrix(cbind(coast.cells$long[coast.cells$region=="EBS"], 
+                          coast.cells$lat[coast.cells$region=="EBS"]))
+
+dist.ebs <- rdist.earth(ebs.x1, ebs.x2, miles=F)
+
+colnames(dist.ebs) <- coast.cells$cell[coast.cells$region=="EBS"]
+rownames(dist.ebs) <- run.cells$stock[run.cells$region=="EBS"]
+  
+for(i in 1:nrow(dist.ebs)){
+ # i <- 1
+  run <- rownames(dist.ebs)[i]
+  use <- dist.ebs[i,] <= 400 # changing to 400 km as per Mueter et al. 2002 CJFAS
+  cells <- as.vector(colnames(dist.ebs)[use])
+  cc <- cells[1]
+  
+  for(j in 2:length(cells)){
+    cc <- c(cc,cells[j])
+    
+  }
+  
+  run.cells$cells[run.cells$stock==run] <- paste(cells, collapse=",")
+}
+
+###
+# get cells <= 400 km away for goa runs...
+goa.x1 <- as.matrix(cbind(run.cells$long[run.cells$region %in% c("South", "GOA")], 
+                          run.cells$lat[run.cells$region %in% c("South", "GOA")]))
+goa.x2 <- as.matrix(cbind(coast.cells$long[coast.cells$region %in% c("South", "GOA")], 
+                          coast.cells$lat[coast.cells$region %in% c("South", "GOA")]))
+
+dist.goa <- rdist.earth(goa.x1, goa.x2, miles=F)
+
+colnames(dist.goa) <- coast.cells$cell[coast.cells$region %in% c("South", "GOA")]
+rownames(dist.goa) <- run.cells$stock[run.cells$region %in% c("South", "GOA")]
+
+for(i in 1:nrow(dist.goa)){
+  # i <- 1
+  run <- rownames(dist.goa)[i]
+  use <- dist.goa[i,] <= 400
+  cells <- as.vector(colnames(dist.goa)[use])
+  cc <- cells[1]
+  
+  for(j in 2:length(cells)){
+    cc <- c(cc,cells[j])
+  }
+  run.cells$cells[run.cells$stock==run] <- paste(cells, collapse=",")
+}
+
+# NB: NEED TO PLOT CELLS FOR EACH RUN IN ORDER TO CHECK THAT THIS IS CORRECT!
+
+pdf("runs and local sst cells.pdf", 10,8)
+par(mfrow=c(4,3), las=1, mar=c(2,2,2,0.5))
+
+for(i in 1:nrow(run.cells)){
+#i <- 1
+sub <- run.cells[i,]
+sub.sst <- SST
+temp <- strsplit(sub$cells,",")
+use <- matrix(unlist(temp), ncol=1, byrow=TRUE)
+
+keep <- colnames(sub.sst) %in% use
+sub.sst[,!keep] <- NA
+
+lim <- range(colMeans(SST), na.rm = T)
+
+sub.mean <- colMeans(sub.sst)
+z <- t(matrix(sub.mean,length(y)))  # Re-shape to a matrix with latitudes in columns, longitudes in rows
+image(x,y,z, col=tim.colors(64), zlim=lim, xlim=c(160,240), ylim=c(44,70), ylab="", xlab="", yaxt="n", xaxt="n")
+#contour(x, y, z, add=T)  
+map('world2Hires', 'usa',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'Canada',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+map('world2Hires', 'ussr',fill=T,xlim=c(130,250), ylim=c(20,70),add=T, lwd=0.5, col="lightyellow3")
+points(360-sub$long, sub$lat, pch=21, bg="red", cex=1.5)
+mtext(paste(sub$species, sub$stock))
+}
+dev.off()
+
+# create matrix of correlations for early and late period
+run.corrs.early <- run.cells %>%
+  select(species, stock, region)
+
+run.corrs.early[,4:45] <- NA
+names(run.corrs.early)[4:45] <- 1:42
+
+run.corrs.late <- run.corrs.early
+
+# set up an entry year column to use in partitioning by era
+run.dat$entry.yr <- run.dat$brood.yr + 1
+for(i in 1:nrow(run.dat)){
+if(run.dat$species[i] == "Sockeye") {run.dat$entry.yr[i]<-run.dat$brood.yr[i]+2} 
+}
+
+# fit a single SR model to the entire time series and get residuals
+run.dat$res <- NA
+
+for(i in 1:nrow(run.cells)){
+  #i <- 1
+  temp <- run.dat %>%
+    filter(stock==run.cells$stock[i])
+  
+  run.dat$res[run.dat$stock==run.cells$stock[i]] <- resid(lm(log(recruits/spawners) ~ spawners, data=temp)) # get residuals from Ricker model
+}
+
+# first, the early period
+for(i in 1:nrow(run.cells)){ # loop through each run
+  # i <- 11
+  temp <- run.dat %>%
+    filter(stock==run.cells$stock[i], entry.yr <=1988) # select run of interest
+  
+#  res <- resid(lm(log(recruits/spawners) ~ spawners, data=temp)) # get residuals from Ricker model
+  
+  # and get the relevant SST data
+  cells <- unlist(strsplit(run.cells$cell[i], ","))
+  temp.sst <- coast.anom[,colnames(coast.anom) %in% cells]
+  time0 <- d[m=="Jun" & yr %in% temp$brood.yr]
+  
+  count <- 1:nrow(temp.sst)
+  
+  count <- count[rownames(temp.sst) %in% as.character(time0)]
+  
+  for(j in 1:42){ # loop through each of the lags
+   #  j <- 7
+    run.corrs.early[(i),(j+3)] <- cor(temp$res, rowMeans(temp.sst[count+j,]), use="p")
+   # if(is.na(run.corrs[(i),(j+3)])==T) {stop}
+  }
+}
+
+# and now the late era
+for(i in 1:nrow(run.cells)){ # loop through each run
+  # i <- 11
+  temp <- run.dat %>%
+    filter(stock==run.cells$stock[i], entry.yr >1988) # select run of interest
+  
+#  res <- resid(lm(log(recruits/spawners) ~ spawners, data=temp)) # get residuals from Ricker model
+
+  ##############################################
+  # NOTE - NEED TO COMPARE WITH BEVERTON-HOLT!
+  ##############################################
+    
+  # and get the relevant SST data
+  cells <- unlist(strsplit(run.cells$cell[i], ","))
+  temp.sst <- coast.anom[,colnames(coast.anom) %in% cells]
+  time0 <- d[m=="Jun" & yr %in% temp$brood.yr]
+  
+  count <- 1:nrow(temp.sst)
+  
+  count <- count[rownames(temp.sst) %in% as.character(time0)]
+  
+  for(j in 1:42){ # loop through each of the lags
+   #  j <- 7
+   run.corrs.late[(i),(j+3)] <- cor(temp$res, rowMeans(temp.sst[count+j,]), use="p")
+  # run.corrs.late[(i),(j+3)] <- cor(res, rowMeans(temp.sst[count+j,]), use="p")
+   # if(is.na(run.corrs[(i),(j+3)])==T) {stop}
+  }
+}
+
+pink.early <- pink.late <- sock.early <- sock.late <- chum.early <- chum.late <- matrix(nrow=3, ncol=42)
+# now get averages
+for(j in 1:42){
+
+pink.early[,j] <- tapply(run.corrs.early[run.corrs.early$species=="Pink",(j+3)],
+                         run.corrs.early$region[run.corrs.early$species=="Pink"], mean, na.rm=T)
+pink.late[,j] <- tapply(run.corrs.late[run.corrs.late$species=="Pink",(j+3)],
+                        run.corrs.late$region[run.corrs.late$species=="Pink"], mean, na.rm=T)
+
+chum.early[,j] <- tapply(run.corrs.early[run.corrs.early$species=="Chum",(j+3)],
+                         run.corrs.early$region[run.corrs.early$species=="Chum"], mean, na.rm=T)
+chum.late[,j] <- tapply(run.corrs.late[run.corrs.late$species=="Chum",(j+3)],
+                        run.corrs.late$region[run.corrs.late$species=="Chum"], mean, na.rm=T)
+
+sock.early[,j] <- tapply(run.corrs.early[run.corrs.early$species=="Sockeye",(j+3)],
+                         run.corrs.early$region[run.corrs.early$species=="Sockeye"], mean, na.rm=T)
+sock.late[,j] <- tapply(run.corrs.late[run.corrs.late$species=="Sockeye",(j+3)],
+                        run.corrs.late$region[run.corrs.late$species=="Sockeye"], mean, na.rm=T)
+
+}
+
+pink.early <- as.data.frame(pink.early)
+pink.late <- as.data.frame(pink.late)
+
+chum.early <- as.data.frame(chum.early)
+chum.late <- as.data.frame(chum.late)
+
+sock.early <- as.data.frame(sock.early)
+sock.late <- as.data.frame(sock.late)
+
+
+pink.early$region <- pink.late$region <- chum.early$region <- chum.late$region <- sock.early$region <- sock.late$region <- 
+  c("Bering Sea", "Gulf of Alaska", "South")
+
+pink.early$era <- chum.early$era <- sock.early$era <- "Before 1988/89"
+pink.late$era <- chum.late$era <- sock.late$era <- "After 1988/89"
+
+pink.early$species <- pink.late$species <- "Pink"
+sock.early$species <- sock.late$species <- "Sockeye"
+chum.early$species <- chum.late$species <- "Chum"
+
+plot.corrs <- rbind(pink.early, pink.late, chum.early, chum.late, sock.early, sock.late)
+
+plot.corrs <- plot.corrs %>%
+  gather(lag, correlation, -region, -era, -species) %>%
+  mutate(lag.plot=rep(1:42, each=18))
+
+# add a month column for plot labels
+month.lab <- c("Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+ggplot(plot.corrs, aes(lag.plot, correlation, color=era)) + geom_line(lwd=0.5) + geom_point() +
+  facet_grid(region~species) + geom_hline(yintercept = 0, color="dark grey") +
+  scale_x_continuous(breaks=seq(1,42, by=3), labels = month.lab[seq(1,42, by=3)]) +
+  theme(axis.text.x = element_text(angle = 90), legend.position = "top", legend.title = element_blank(),
+        axis.title.x = element_blank()) + ylab("Correlation coefficient") + 
+  geom_vline(xintercept = c(6.5, 18.5, 30.5), lty=2, color="dark grey")
+
+
+# # reduce to only the applicable lags
+# pink.e.short <- pink.early
+# pink.e.short[,19:42] <- NA
+#   
+# pink.l.short <- pink.late
+# pink.l.short[,19:42] <- NA
+# 
+# chum.e.short <- chum.early
+# chum.e.short[,19:42] <- NA
+#   
+# chum.l.short <- chum.late
+# chum.l.short[,19:42] <- NA
+# 
+# plot.corrs <- rbind(pink.e.short, pink.l.short, chum.e.short, chum.l.short, sock.early, sock.late)
+# 
+# plot.corrs <- plot.corrs %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:42, each=18))
+
+
+# pink.l.short <- pink.late %>%
+#   select(1:18, 43:45)
+# 
+# chum.e.short <- chum.early %>%
+#   select(1:18, 43:45)
+# 
+# chum.l.short <- chum.late %>%
+#   select(1:18, 43:45)
+# 
+# pink.e.short <- pink.e.short %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:18, each=3))
+# 
+# pink.l.short <- pink.l.short %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:18, each=3))
+# 
+# chum.e.short <- chum.e.short %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:18, each=3))
+# 
+# chum.l.short <- chum.l.short %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:18, each=3))
+# 
+# sock.early <- sock.early %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:42, each=3))
+# 
+# sock.late <- sock.late %>%
+#   gather(lag, correlation, -region, -era, -species) %>%
+#   mutate(lag.plot=rep(1:42, each=3))
+# 
+# plot.corrs <- rbind(pink.e.short, pink.l.short, chum.e.short, chum.l.short, sock.early, sock.late)
+
+ change <- grep("Bering", plot.corrs$region)
+ plot.corrs$region[change] <- "Eastern Bering Sea"
+
+plot.corrs$plot.era <- as.factor(ifelse(plot.corrs$era=="Before 1988/89", 1,2))
+  
+# and a version for the paper
+
+ plot.corrs$species <- as.factor(plot.corrs$species)
+
+ plot.corrs$sp.order <- ifelse(plot.corrs$species=="Pink", 1,
+                                         ifelse(plot.corrs$species=="Sockeye", 2, 3))
+
+
+
+
+
+plot.corrs$species <- reorder(plot.corrs$species, plot.corrs$sp.order)
+
+cb <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+png("nonstationary sst correlations for paper.png", 7,6, units="in", res=300)
+
+ggplot(plot.corrs, aes(lag.plot, correlation, color=plot.era)) + theme_linedraw()+ geom_line(lwd=0.5) + 
+  geom_point() + facet_grid(region~species) +
+ geom_hline(yintercept = 0, color="dark grey") +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5), legend.position = "top", legend.title = element_blank(),
+        axis.title.x = element_blank()) + ylab("Correlation coefficient") + 
+  geom_vline(xintercept = c(6.5, 18.5, 30.5), lty=2, color="dark grey") +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  scale_x_continuous(breaks=seq(1,42, by=3), labels = month.lab[seq(1,42, by=3)]) + 
+  scale_color_manual(labels = c("Before 1988/89", "After 1988/89"), values = cb[c(2,6)])
+
+dev.off()
+
+# also make a table of runs used in analysis
+
+run.table <- run.dat %>%
+  select(species, region, stock, brood.yr) %>%
+  group_by(region, species, stock) %>%
+  summarize(min(brood.yr), max(brood.yr))
+  
+write.csv(run.table, "run table.csv")
+
+```
+
+I can clean the plot up later. For now I'll define the months to use as:
+  Jan-Oct of BY + 1 for chum and pink, and
+  Jan BY + 1 through April BY + 3 for sockeye.
+  
+(So Fig. 3 will be the LME results, and Fig. 4 will be the (possibly) addition of Aleutian Low to the models?)
+
+```{r}
+
+# now go through and relate the correct sst data to each SR observation
+run.dat$sst <- NA
+
+for(i in 1:nrow(run.cells)){
+#i <- 43
+sub <- run.cells[i,]
+sub.anom <- coast.anom # using SST anomalies NB: CHECK THAT THESE ARE CALCULATED AS 
+cells <- strsplit(sub$cells,",")
+use <- matrix(unlist(cells), ncol=1, byrow=TRUE)
+
+keep <- colnames(sub.anom) %in% use
+sub.anom[,!keep] <- NA
+
+# get data for the run of interest...
+temp <- run.dat %>%
+  filter(species==sub$species, stock==sub$stock)
+
+time0 <- d[m=="Jun" & yr %in% temp$brood.yr]
+  
+# set 'count' as all months/rows in the data
+  count <- 1:nrow(sub.anom)
+# and reduce to only Jun of relevant brood years  
+  count <- count[rownames(temp.sst) %in% as.character(time0)]
+
+# set relevant months of SST data for each species
+if(sub$species %in% c("Pink", "Chum")) {relevant <- 7:16} # Jan-Oct BY + 1
+if(sub$species == "Sockeye" & sub$region %in% c("GOA", "EBS")) {relevant <- 7:36} # Jan BY + 1 - May BY + 3
+if(sub$species == "Sockeye" & sub$region == "South") {relevant <- 7:23} # Jan BY + 1 - May BY + 2  
+# now loop through each brood year and get the appropriate mean sst
+  relevant.sst <- NA
+for (ii in 1:length(count)){
+ # ii <- 1
+  relevant.sst[ii] <- mean(rowMeans(sub.anom[(count[ii]+relevant),], na.rm=T))
+  
+}  
+  
+# and place these mean SST data into the run.dat df  
+ 
+  run.dat$sst[run.dat$species==sub$species & run.dat$stock==sub$stock] <- relevant.sst
+}  
+
+# finally, identify era based on entry year
+run.dat$era <- 1
+run.dat$era[run.dat$entry.yr >= 1989] <- 2
+
+# and save for Lorenzo
+write.csv(run.dat, "coastwide data 1.17.19.csv")
+```
+
+Make a quick plot of temperature distributions by era!
+
+```{r}
+
+plot.dat <- run.dat %>%
+  select(species, region, sst, era)
+  
+plot.dat$era <- ifelse(plot.dat$era==1, "Pre", "Post")
+plot.dat$region.era <- paste(plot.dat$region, plot.dat$era, sep=" ")
+
+png("sst histograms.png", 6,6, units="in", res=300)
+bw=20
+ggplot(plot.dat, aes(sst)) + geom_histogram(bins = bw, fill="dark grey", color="black") + 
+  facet_grid(region.era ~ species, scales="free") + xlab("SST (anomaly)")
+
+dev.off()
+```
+
+Now test for changing SST effects by era. Fit separate models to each species.
+
+```{r}
+
+# begin with pink
+# use the approach outlined by Zuur et al.
+# fit model with full fixed effects structure and different random 
+# effects using REML and compare with ACIc
+
+# fixed effects model
+p1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept for stocks
+p2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and slope on sst for stocks
+p3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and era effect for stocks
+p4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and slope on sst by era for stocks
+p5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and region effect for stocks
+p6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+p8 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random slope on sst by era for stocks
+p9 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random region effect for stocks
+p10 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p11 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11) 
+AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+So p2 is best: random intercepts for each stock. Now look at random effects residuals for each.
+
+
+```{r}
+qqnorm(p2, ~ranef(., level=1))
+qqnorm(p4, ~ranef(., level=1))
+qqnorm(p10, ~ranef(., level=1))
+qqnorm(p3, ~ranef(., level=1))
+qqnorm(p5, ~ranef(., level=1))
+```
+
+Now test for the best-supported fixed structure using likelihood ratio test comparing nested models fit with ML.
+
+```{r}
+# full model is p2 from above - but changing to ML estimation
+pfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# p1 removes era interaction
+p1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+
+anova(pfull, p1)
+```
+
+So the interaction term is strongly supported. Can also drop main era term and compare.
+
+```{r}
+
+# p2 removes era main term
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+AICc(p2, pfull)
+anova(p2, pfull)
+```
+
+So the full term remains the best. We can also drop the region term and compare.
+```{r}
+
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+anova(pfull, p3)
+```
+
+No support at all.
+
+Or drop the era term completely and compare.
+```{r}
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+anova(pfull, p4)
+
+
+```
+
+Or the full interaction sst model.
+```{r}
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+```
+
+So the full model is the best, and we can refit with REML and plot.
+
+```{r}
+# renaming as pbest
+pbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+summary(pbest)$tTable
+intervals(pbest, which="fixed")$fixed
+```
+
+Now the chum comparison. Again, begin by evaluating the random effets structure.
+
+```{r}
+# fixed effects model
+c1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept for stocks
+c2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept and slope on sst for stocks
+c3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+c4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+c5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+c6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+c7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+c8 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+c9 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+c10 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+c11 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11) %>%
+  mutate(model=rownames(AIC)) %>%
+  arrange(AICc)
+AIC
+```
+
+Model 2 is again the best. Now look at random effects residuals for each.
+
+```{r}
+qqnorm(c2, ~ranef(., level=1))
+qqnorm(c4, ~ranef(., level=1))
+qqnorm(c3, ~ranef(., level=1))
+qqnorm(c5, ~ranef(., level=1))
+```
+
+Model 2 looks fine, so we'll use that again.
+
+Again, fit to the range of models used for pinks.
+```{r}
+
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c.aic <- AICc(cfull, c1, c2, c3, c4, c5, c6, c7, c8)
+c.aic$d.aic <- c.aic$AICc-min(c.aic$AICc)
+
+c.aic
+
+anova(cfull, c3)
+anova(c4, c3)
+```
+```{r}
+# full model is c2 from above - but changing to ML estimation
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# c1 removes era interaction
+c1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c1)
+```
+So the interaction term is supported. Can also drop main era term and compare.
+```{r}
+# c2 removes era main term
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c2)
+anova(c2, cfull)
+```
+So the full term remains the best. We can also drop the region term and compare.
+```{r}
+
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c3)
+```
+Again, no support. 
+
+Drop the era term completely and compare.
+```{r}
+
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c4)
+```
+
+Or the full interaction sst model.
+```{r}
+
+c5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region*sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c5)
+```
+
+So the full model is the best, and we can refit with REML and plot.
+
+```{r}
+# renaming as cbest
+cbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+#str(summary(cbest))
+summary(cbest)$tTable
+intervals(cbest, which="fixed")$fixed
+```
+
+And now the Sockeye analysis. Begin with the random effects selection.
+
+```{r}
+# fixed effects model
+s1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept for stocks
+s2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept and slope on sst for stocks
+s3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+s4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+s5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+s6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+s8 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+s9 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+s10 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s11 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11)
+  AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+Similar results to the other two. Look at the random effects residuals.
+```{r}
+qqnorm(s4, ~ranef(., level=1))
+qqnorm(s2, ~ranef(., level=1))
+qqnorm(s3, ~ranef(., level=1))
+```
+
+Stay with the s2 structure. Almost the same AICc as s4 - delta AICc = 0.001, and the residuals might be a little better. Biggest advantage in terms of keeping things uniform across species models.
+
+Now select the fixed structure.
+
+Again, begin with the comparison of the full suite of nested models.
+```{r}
+
+sfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s.aic <- AICc(sfull, s1, s2, s3, s4, s5, s6, s7, s8)
+s.aic$d.aic <- s.aic$AICc-min(s.aic$AICc)
+
+s.aic
+
+anova(sfull, s1) # full is the best!
+
+```
+
+So sfull is the best, and we can refit with REML and plot.
+
+```{r}
+# renaming as cbest
+sbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+summary(sbest)$tTable
+intervals(sbest, which="fixed")$fixed
+```
+
+And double check that comparison.
+
+```{r}
+sbest.check <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region*sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+scompare.check <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+anova(sbest.check, scompare.check)
+```
+
+Now compare with a plot.
+
+```{r, fig.height=3, fig.width=4, fig.align="center"}
+
+plot <- data.frame(species=rep(c("Pink", "Sockeye", "Chum"), each=6), region=rep(c("EBS", "GOA", "South"), each=2),
+                   era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+
+plot[1,4:6] <- intervals(pbest, which="fixed")$fixed[38,]
+plot[2,4:6] <- intervals(pbest, which="fixed")$fixed[41,]
+plot[3,4:6] <- intervals(pbest, which="fixed")$fixed[39,]
+plot[4,4:6] <- intervals(pbest, which="fixed")$fixed[42,]
+plot[5,4:6] <- intervals(pbest, which="fixed")$fixed[40,]
+plot[6,4:6] <- intervals(pbest, which="fixed")$fixed[43,]
+
+plot[7,4:6] <- intervals(sbest, which="fixed")$fixed[33,]
+plot[8,4:6] <- intervals(sbest, which="fixed")$fixed[36,]
+plot[9,4:6] <- intervals(sbest, which="fixed")$fixed[34,]
+plot[10,4:6] <- intervals(sbest, which="fixed")$fixed[37,]
+plot[11,4:6] <- intervals(sbest, which="fixed")$fixed[35,]
+plot[12,4:6] <- intervals(sbest, which="fixed")$fixed[38,]
+
+plot[13,4:6] <- intervals(cbest, which="fixed")$fixed[24,]
+plot[14,4:6] <- intervals(cbest, which="fixed")$fixed[27,]
+plot[15,4:6] <- intervals(cbest, which="fixed")$fixed[25,]
+plot[16,4:6] <- intervals(cbest, which="fixed")$fixed[28,]
+plot[17,4:6] <- intervals(cbest, which="fixed")$fixed[26,]
+plot[18,4:6] <- intervals(cbest, which="fixed")$fixed[29,]
+
+plot$era <- reorder(plot$era, -order(plot$era))
+
+dodge <- position_dodge(width=0.9)
+
+png("mixed effects results.png", 6,4, units="in", res=300)
+ggplot(plot, aes(region, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("SST coefficient") + facet_wrap(~species) + 
+  theme(legend.position = c(0.15, 0.8), legend.title = element_blank()) +
+scale_fill_manual(values=cb[c(2,6)])
+
+dev.off()
+
+```
+
+Now - compare with the more restricted months of SST data used by Mueter et al. 2002. April-July for Washington, British Columbia, and Southeast Alaska stocks, May-August for the remainder of the Gulf of Alaska, and June-September for the Bering Sea. 
+
+```{r}
+
+# now go through and relate the correct sst data to each SR observation
+run.dat$sst <- NA
+
+for(i in 1:nrow(run.cells)){
+#i <- 1
+sub <- run.cells[i,]
+sub.anom <- coast.anom # using SST anomalies NB: CHECK THAT THESE ARE CALCULATED AS 
+cells <- strsplit(sub$cells,",")
+use <- matrix(unlist(cells), ncol=1, byrow=TRUE)
+
+keep <- colnames(sub.anom) %in% use
+sub.anom[,!keep] <- NA
+
+# get data for the run of interest...
+temp <- run.dat %>%
+  filter(species==sub$species, stock==sub$stock)
+
+time0 <- d[m=="Jun" & yr %in% temp$brood.yr]
+  
+# set 'count' as all months/rows in the data
+  count <- 1:nrow(sub.anom)
+# and reduce to only Jun of relevant brood years  
+  count <- count[rownames(temp.sst) %in% as.character(time0)]
+
+# set relevant months of SST data for each species and area
+if(sub$species %in% c("Pink", "Chum") & sub$long < 140) {relevant <- 10:13} # Apr-Jul BY + 1
+if(sub$species %in% c("Pink", "Chum") & sub$region == "GOA" & sub$long > 140) {relevant <- 11:14} # May-Aug BY + 1
+if(sub$species %in% c("Pink", "Chum") & sub$region == "EBS") {relevant <- 12:15} # Jun-Sep BY + 1
+
+  # could refine the sockeye data and average by ocean entry...not doing that at this point  
+if(sub$species == "Sockeye" & sub$region %in% c("GOA", "EBS")) {relevant <- c(23:26,36:39)} # Jan BY + 1 - May BY + 3
+if(sub$species == "Sockeye" & sub$region == "South") {relevant <- 23:26} # Jan BY + 1 - May BY + 2  
+# now loop through each brood year and get the appropriate mean sst
+  relevant.sst <- NA
+for (ii in 1:length(count)){
+ # ii <- 1
+  relevant.sst[ii] <- mean(rowMeans(sub.anom[(count[ii]+relevant),], na.rm=T))
+  
+}  
+  
+# and place these mean SST data into the run.dat df  
+ 
+  run.dat$sst[run.dat$species==sub$species & run.dat$stock==sub$stock] <- relevant.sst
+}  
+
+# finally, identify era based on entry year
+run.dat$era <- 1
+run.dat$era[run.dat$entry.yr >= 1989] <- 2
+```
+
+Now refit the mixed-effects models. Begin with Pink.
+
+```{r}
+
+# begin with pink
+# use the approach outlined by Zuur et al.
+# fit model with full fixed effects structure and different random 
+# effects using REML and compare with ACIc
+
+# fixed effects model
+p1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept for stocks
+p2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and slope on sst for stocks
+p3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and era effect for stocks
+p4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+p5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and region effect for stocks
+p6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+p8 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random slope on sst by era for stocks
+p9 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random region effect for stocks
+p10 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p11 <- lme(log(recruits/spawners) ~ 1 + sst*region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11) 
+AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+Random intercepts for slopes again the best. Now select fixed structure.
+
+Now test for the best-supported fixed structure using likelihood ratio test comparing nested models fit with ML.
+
+```{r}
+# full model is p2 from above - but changing to ML estimation
+pfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# p1 removes era interaction
+p1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+
+anova(pfull, p1)
+
+```
+
+Same result as before - full model is the best, and interaction term is highly significant.
+
+Now chum.
+
+```{r}
+# fixed effects model
+c1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept for stocks
+c2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept and slope on sst for stocks
+c3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+c4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+c5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+c6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# THIS ONE DOESN'T FIT!
+#c7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+#          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+#          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+c8 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+c9 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+c10 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+c11 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(c1, c2, c3, c4, c5, c6,c8, c9, c10, c11) %>%
+  mutate(model=rownames(AIC)) %>%
+  arrange(AICc)
+AIC
+```
+
+Again, random intercepts for stocks is the best.
+
+```{r}
+
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c.aic <- AICc(cfull, c1, c2, c3, c4, c5, c6, c7, c8)
+c.aic$d.aic <- c.aic$AICc-min(c.aic$AICc)
+
+c.aic
+
+anova(cfull, c3)
+anova(c4, c3)
+```
+
+Similar result - I think no support for regional differences, but era x sst effect is there.
+
+```{r}
+# fixed effects model
+s1 <- gls(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept for stocks
+s2 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept and slope on sst for stocks
+s3 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+s4 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+s5 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+s6 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+s8 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+s9 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+s10 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s11 <- lme(log(recruits/spawners) ~ 1 + sst:region*era + stock:spawners, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11)
+  AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+Again, same random effects structure. Now the fixed effects selection/comparison.
+
+```{r}
+
+sfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s.aic <- AICc(sfull, s1, s2, s3, s4, s5, s6, s7, s8)
+s.aic$d.aic <- s.aic$AICc-min(s.aic$AICc)
+
+s.aic
+
+anova(sfull, s1) # full is the best!
+
+```
+
+OK! So here the stationary model is the best.
+
+Plot.
+```{r}
+# renaming 
+p.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+summary(p.plot)$tTable
+intervals(p.plot, which="fixed")$fixed
+
+# renaming as c.plot
+c.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+summary(c.plot)$tTable
+intervals(c.plot, which="fixed")$fixed
+
+# renaming as s.plot
+s.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+summary(s.plot)$tTable
+intervals(s.plot, which="fixed")$fixed
+
+plot <- data.frame(species=rep(c("Pink", "Sockeye", "Chum"), each=6), region=rep(c("EBS", "GOA", "South"), each=2),
+                   era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+
+plot[1,4:6] <- intervals(p.plot, which="fixed")$fixed[38,]
+plot[2,4:6] <- intervals(p.plot, which="fixed")$fixed[41,]
+plot[3,4:6] <- intervals(p.plot, which="fixed")$fixed[39,]
+plot[4,4:6] <- intervals(p.plot, which="fixed")$fixed[42,]
+plot[5,4:6] <- intervals(p.plot, which="fixed")$fixed[40,]
+plot[6,4:6] <- intervals(p.plot, which="fixed")$fixed[43,]
+
+plot[7,4:6] <- intervals(s.plot, which="fixed")$fixed[33,]
+plot[8,4:6] <- intervals(s.plot, which="fixed")$fixed[36,]
+plot[9,4:6] <- intervals(s.plot, which="fixed")$fixed[34,]
+plot[10,4:6] <- intervals(s.plot, which="fixed")$fixed[37,]
+plot[11,4:6] <- intervals(s.plot, which="fixed")$fixed[35,]
+plot[12,4:6] <- intervals(s.plot, which="fixed")$fixed[38,]
+
+plot[13,4:6] <- intervals(c.plot, which="fixed")$fixed[24,]
+plot[14,4:6] <- intervals(c.plot, which="fixed")$fixed[27,]
+plot[15,4:6] <- intervals(c.plot, which="fixed")$fixed[25,]
+plot[16,4:6] <- intervals(c.plot, which="fixed")$fixed[28,]
+plot[17,4:6] <- intervals(c.plot, which="fixed")$fixed[26,]
+plot[18,4:6] <- intervals(c.plot, which="fixed")$fixed[29,]
+
+plot$era <- reorder(plot$era, -order(plot$era))
+
+dodge <- position_dodge(width=0.9)
+
+png("mixed effects results with restricted months.png", 6,4, units="in", res=300)
+ggplot(plot, aes(region, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("SST coefficient") + facet_wrap(~species) + 
+  theme(legend.position = c(0.15, 0.8), legend.title = element_blank()) +
+scale_fill_manual(values=cb[c(2,6)])
+
+dev.off()
+
+```
+
+Adding PDO and NPGO analysis.
+
+
+
+Quickly...start with pink models.
+
+```{r}
+
+pfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# p1 removes era interaction
+p1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p.aic <- AICc(pfull, p1, p2, p3, p4, p5, p6, p7, p8)
+p.aic$d.aic <- p.aic$AICc-min(p.aic$AICc)
+
+p.aic
+
+anova(pfull, p1)
+```
+
+Now chum.
+
+```{r}
+
+
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# p1 removes era interaction
+c1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c.aic <- AICc(cfull, c1, c2, c3, c4, c5, c6, c7, c8)
+c.aic$d.aic <- c.aic$AICc-min(c.aic$AICc)
+
+c.aic
+
+anova(cfull, c2)
+```
+
+And sockeye.
+
+```{r}
+
+
+sfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# p1 removes era interaction
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo*era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region:pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+s.aic <- AICc(sfull, s1, s2, s3, s4, s5, s6, s7, s8)
+s.aic$d.aic <- s.aic$AICc-min(s.aic$AICc)
+
+s.aic
+
+anova(cfull, c2)
+```
+
+hmmm....quickly plot!
+
+```{r}
+# renaming 
+p.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+summary(p.plot)$tTable
+intervals(p.plot, which="fixed")$fixed
+
+# renaming as c.plot
+c.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+summary(c.plot)$tTable
+intervals(c.plot, which="fixed")$fixed
+
+# renaming as s.plot
+s.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + pdo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+summary(s.plot)$tTable
+intervals(s.plot, which="fixed")$fixed
+
+plot <- data.frame(species=rep(c("Pink", "Sockeye", "Chum"), each=6), region=rep(c("EBS", "GOA", "South"), each=2),
+                   era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+
+plot[1,4:6] <- intervals(p.plot, which="fixed")$fixed[38,]
+plot[2,4:6] <- intervals(p.plot, which="fixed")$fixed[41,]
+plot[3,4:6] <- intervals(p.plot, which="fixed")$fixed[39,]
+plot[4,4:6] <- intervals(p.plot, which="fixed")$fixed[42,]
+plot[5,4:6] <- intervals(p.plot, which="fixed")$fixed[40,]
+plot[6,4:6] <- intervals(p.plot, which="fixed")$fixed[43,]
+
+plot[7,4:6] <- intervals(s.plot, which="fixed")$fixed[33,]
+plot[8,4:6] <- intervals(s.plot, which="fixed")$fixed[36,]
+plot[9,4:6] <- intervals(s.plot, which="fixed")$fixed[34,]
+plot[10,4:6] <- intervals(s.plot, which="fixed")$fixed[37,]
+plot[11,4:6] <- intervals(s.plot, which="fixed")$fixed[35,]
+plot[12,4:6] <- intervals(s.plot, which="fixed")$fixed[38,]
+
+plot[13,4:6] <- intervals(c.plot, which="fixed")$fixed[24,]
+plot[14,4:6] <- intervals(c.plot, which="fixed")$fixed[27,]
+plot[15,4:6] <- intervals(c.plot, which="fixed")$fixed[25,]
+plot[16,4:6] <- intervals(c.plot, which="fixed")$fixed[28,]
+plot[17,4:6] <- intervals(c.plot, which="fixed")$fixed[26,]
+plot[18,4:6] <- intervals(c.plot, which="fixed")$fixed[29,]
+
+plot$era <- reorder(plot$era, -order(plot$era))
+
+dodge <- position_dodge(width=0.9)
+
+png("PDO mixed effects results.png", 6,4.5, units="in", res=300)
+ggplot(plot, aes(region, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("pdo coefficient") + facet_wrap(~species) + 
+  theme(legend.position = c(0.12, 0.15), legend.title = element_blank()) +
+scale_fill_manual(values=cb[c(2,6)]) + ggtitle("PDO effects on salmon survival")
+
+dev.off()
+
+# and a comnbined plot!
+
+pdo.plot <- ggplot(plot, aes(species, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("pdo coefficient") + facet_wrap(~region, nrow = 3) + 
+  theme(legend.position = c(0.6, 0.39), legend.title = element_blank()) +
+scale_fill_manual(values=cb[c(2,6)]) + ggtitle("PDO - salmon")
+
+```
+
+Now the same plots for NPGO
+
+```{r}
+# renaming 
+p.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + npgo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+summary(p.plot)$tTable
+intervals(p.plot, which="fixed")$fixed
+
+# renaming as c.plot
+c.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + npgo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+summary(c.plot)$tTable
+intervals(c.plot, which="fixed")$fixed
+
+# renaming as s.plot
+s.plot <- lme(log(recruits/spawners) ~ 1 + stock:spawners + npgo:region*era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+summary(s.plot)$tTable
+intervals(s.plot, which="fixed")$fixed
+
+plot <- data.frame(species=rep(c("Pink", "Sockeye", "Chum"), each=6), region=rep(c("EBS", "GOA", "South"), each=2),
+                   era=c("Before 1988/89", "After 1988/89"), LCI=NA, effect=NA, UCI=NA)
+
+plot[1,4:6] <- intervals(p.plot, which="fixed")$fixed[38,]
+plot[2,4:6] <- intervals(p.plot, which="fixed")$fixed[41,]
+plot[3,4:6] <- intervals(p.plot, which="fixed")$fixed[39,]
+plot[4,4:6] <- intervals(p.plot, which="fixed")$fixed[42,]
+plot[5,4:6] <- intervals(p.plot, which="fixed")$fixed[40,]
+plot[6,4:6] <- intervals(p.plot, which="fixed")$fixed[43,]
+
+plot[7,4:6] <- intervals(s.plot, which="fixed")$fixed[33,]
+plot[8,4:6] <- intervals(s.plot, which="fixed")$fixed[36,]
+plot[9,4:6] <- intervals(s.plot, which="fixed")$fixed[34,]
+plot[10,4:6] <- intervals(s.plot, which="fixed")$fixed[37,]
+plot[11,4:6] <- intervals(s.plot, which="fixed")$fixed[35,]
+plot[12,4:6] <- intervals(s.plot, which="fixed")$fixed[38,]
+
+plot[13,4:6] <- intervals(c.plot, which="fixed")$fixed[24,]
+plot[14,4:6] <- intervals(c.plot, which="fixed")$fixed[27,]
+plot[15,4:6] <- intervals(c.plot, which="fixed")$fixed[25,]
+plot[16,4:6] <- intervals(c.plot, which="fixed")$fixed[28,]
+plot[17,4:6] <- intervals(c.plot, which="fixed")$fixed[26,]
+plot[18,4:6] <- intervals(c.plot, which="fixed")$fixed[29,]
+
+plot$era <- reorder(plot$era, -order(plot$era))
+
+dodge <- position_dodge(width=0.9)
+
+png("NPGO mixed effects results.png", 6,4.5, units="in", res=300)
+ggplot(plot, aes(region, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("npgo coefficient") + facet_wrap(~species) + 
+  theme(legend.position = c(0.88, 0.88), legend.title = element_blank()) +
+scale_fill_manual(values=cb[c(2,6)]) + ggtitle("NPGO effects on salmon survival")
+
+dev.off()
+
+# and a version for the combined plot
+npgo.plot <- ggplot(plot, aes(species, effect, fill=era)) + geom_hline(yintercept = 0, color="dark grey")+ geom_bar(position=dodge, stat="identity") + 
+  geom_errorbar(aes(ymax=UCI, ymin=LCI), position=dodge, width=0.5) + xlab("") + ylab("npgo coefficient") + facet_wrap(~region, nrow = 3) + 
+  theme(legend.position = "none") +
+scale_fill_manual(values=cb[c(2,6)]) + ggtitle("NPGO - salmon")
+
+# combine
+library(ggpubr)
+pdf("PDO NPGO salmon effects.pdf", 5, 9) 
+ggarrange(pdo.plot, npgo.plot, labels = c("a)", "b)"), ncol=2)
+dev.off()
+
+```
