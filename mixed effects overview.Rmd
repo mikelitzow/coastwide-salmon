@@ -1,0 +1,451 @@
+---
+title: "Nonstationary SST-salmon relationships"
+author: "Mike Litzow"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = T, message=FALSE, warning=FALSE)
+library(MuMIn)
+library(dplyr)
+library(ggplot2)
+library(nlme)
+
+options(max.print = 99999)
+
+```
+
+#Approach
+Here I used mixed-effects models to test for changing SST effects by era. I fit separate models to each species, combining data over all three regions. I'm using the approach outlined by Zuur et al. 2009:
+
+First, fit model with full fixed effects structure, using REML estimation, and select best random effects structure using AICc.
+Second, refit with ML and compare nested fixed effects models to evaluate support for different fixed terms. This comparison uses the likelihood ratio test.
+Third, refit selected model with REML to get unbiased coefficient estimates.
+
+The full fixed structure that I'm using is:
+ln(R/S) ~ intercept + stock:spawners + era + region + sst + sst:region:era 
+
+Note that this model invokes a nonstationary sst effect for each region separately. I then test the nonstationary hypothesis by comparing with this reduced model:
+ln(R/S) ~ intercept + stock:spawners + era + region + sst + sst:region
+
+The reduced model invokes a stationary sst effect for each region.
+
+I also explore improved fixed structures by iteratively dropping poorly-supported fixed effects. And I'm using lme with autocorrelated residuals throughout.
+
+I am just making simple plots of each term at this point, rather than plotting a combined estimate of the different terms for each region/era combination.
+
+Region = EBS/GOA/South, sst = sst at ocean entry, era = entry year before/after 1988/89
+
+#Pink salmon
+Begin by selecting the random effects structure.
+```{r}
+run.dat <- read.csv("coastwide data 1.17.19.csv")
+
+# fixed effects model
+p1 <- gls(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept for stocks
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and slope on sst for stocks
+p3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# random intercept and era effect for stocks
+p4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+p5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+p6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+p7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+p8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+p9 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+p10 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+p11 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11) 
+AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+So either p2 (random intercepts for each stock) or p4 (random intercepts and random era effects) is ok. Now look at random effects residuals for each.
+
+```{r, echo=F}
+qqnorm(p2, ~ranef(., level=1))
+```
+
+```{r, echo=F}
+qqnorm(p4, ~ranef(., level=1))
+```
+
+Looks like they're about the same...I'll use p2 (random intercepts), as this is slightly favored.
+
+Now test for the best-supported fixed structure using likelihood ratio test comparing nested models fit with ML. We'll compare a full model with a model replacing the sst:region:era interaction (invoking non-stationary sst effects in each region) with sst:region (invoking stationary sst effects in each region).
+
+```{r}
+# full model is p2 from above - but changing to ML estimation
+pfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+p1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+anova(pfull, p1)
+```
+
+So the full model, invoking nonstationary sst effects, is supported. I'll look at the t table for this supported model. Throughout, I'll be skipping the spawners:stock effects when printing results.
+
+```{r, echo=F}
+summary(pfull)$tTable[c(1:5,41:43),]
+```
+
+So, looking at the main terms, region and sst are supported, but a main era term is not. So we can see if a model excluding that term (but retaining the sst:region:era interaction) is better.
+
+```{r}
+p2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+anova(pfull, p2)
+```
+
+Slightly better in AIC terms, but not supported by the likelihood ratio test. 
+
+Now I'll fit the full model with REML and plot. 
+
+```{r, echo=F}
+pbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Pink"))
+
+# summary(pbest)$tTable[c(1:5, 41:43),]
+
+pplot <- as.data.frame(intervals(pbest, which="fixed")$fixed[c(2:5,41:43),])
+
+pplot$term <- rownames(pplot)
+
+pplot$term <- reorder(pplot$term, pplot$est.)
+
+ggplot(pplot, aes(term, est.)) + geom_errorbar(aes(ymax=upper, ymin=lower), width=0.2) + geom_point(size=3) + coord_flip() +
+  xlab("") + ylab("Coefficient") +  ggtitle("Pink salmon") + geom_hline(yintercept = 0) + 
+  theme(axis.text.y  = element_text(size=10))
+
+```
+
+#Sockeye salmon
+Again, begin with choosing the random structure.
+```{r}
+
+# fixed effects model
+s1 <- gls(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept for stocks
+s2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"))
+
+# random intercept and slope on sst for stocks
+s3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+s4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+s5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+s6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+s8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+s9 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+s10 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s11 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11) 
+AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+So for sockeye a random intercept and random era factors is the best structure. Check the residuals.
+
+```{r, echo=F}
+qqnorm(s4, ~ranef(., level=1))
+```
+
+Pretty good? Check s2 (random intercept model) to compare.
+
+```{r, echo=F}
+qqnorm(s2, ~ranef(., level=1))
+```
+
+I don't think s2 is any better, and s4 is much better in terms of AICc, so I'll stick with s4.
+```{r}
+# full model is p2 from above - but changing to ML estimation
+sfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + era | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 + era | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+anova(sfull, s1)
+```
+
+So the reduced model, invoking stationary sst effects, is  supported. I'll refit with REML and look at the t table for this supported model.
+```{r, echo=F}
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+summary(s1)$tTable[c(1:5,37,36),]
+```
+
+
+ I'll try dropping the era term and see if that improves the model
+
+```{r}
+s1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 + era | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+s2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + sst:region, random = ~1 + era | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+anova(s1, s2)
+
+```
+
+So s1, including the era term, is better. (And I realize we should have a fixed era term since we have a random era term?) I'll plot the best model (s1). 
+
+```{r, echo=F}
+sbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Sockeye"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+
+splot <- as.data.frame(intervals(sbest, which="fixed")$fixed[c(2:5,36:37),])
+
+splot$term <- rownames(splot)
+
+splot$term <- reorder(splot$term, splot$est.)
+
+ggplot(splot, aes(term, est.)) + geom_errorbar(aes(ymax=upper, ymin=lower), width=0.2) + geom_point(size=3) + coord_flip() +
+  xlab("") + ylab("Coefficient") +  ggtitle("Sockeye salmon") + geom_hline(yintercept = 0) + 
+  theme(axis.text.y  = element_text(size=10))
+
+```
+
+#Chum salmon
+Again, begin with the random effects.
+```{r}
+
+# fixed effects model
+c1 <- gls(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, method = "REML", 
+          correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept for stocks
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# random intercept and slope on sst for stocks
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and era effect for stocks
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and slope on sst by era for stocks
+c5 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random intercept and region effect for stocks
+c6 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+c7 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst for stocks
+c8 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~ -1 + sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random slope on sst by era for stocks
+c9 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + sst:era | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+# random region effect for stocks
+c10 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+c11 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~-1 + region:sst | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"),
+          control=lmeControl(opt="optim", maxIter = 200, msMaxIter = 200))
+
+AIC <- AICc(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11) 
+AIC <- AIC %>%
+  mutate(model=rownames(AIC)) %>%
+  mutate(dAICc=AICc-min(AICc)) %>%
+  arrange(AICc)
+AIC
+```
+
+c2 (random intercept model) is slightly better than c4 (random intercepts and era terms). Look at the residuals for each.
+
+```{r, echo=F}
+qqnorm(c2, ~ranef(., level=1))
+```
+
+That looks fine. So we'll examine c4 just for comparison.
+
+```{r, echo=F}
+qqnorm(c4, ~ranef(., level=1))
+```
+
+That's worse. So c2 it is.
+
+Compare nested fixed structure to test hypothesis of nonstationary sst effects.
+
+```{r}
+# full model is p2 from above - but changing to ML estimation
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+c1 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c1)
+```
+
+So here, again, the nonstationary model is best. Here are the t-table results.
+
+```{r, echo=F}
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+summary(cfull)$tTable[c(1:5, 27:29),]
+```
+
+So the era and region main effects are both poorly supported. We'll see if dropping these is supported.
+
+```{r}
+# refit full model with ML estimation
+cfull <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+# model with sst:era effect across all regions
+c2 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c2)
+```
+
+No support. I'll see if a model without the region term is supported
+
+```{r}
+# model with sst:era effect across all regions
+c3 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + era + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c3)
+```
+
+Full model has the better AICc score (although the BIC score is lower for the reduced model!). Try a model without a era main effect.
+
+```{r}
+# model with sst:era effect across all regions
+c4 <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + sst:era, random = ~1 | stock,
+          method = "ML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+anova(cfull, c4)
+```
+
+Still no improvement in AICc terms. So we'll accept the full model for now. Refit with REML and plot.
+
+```{r, echo=F}
+cbest <- lme(log(recruits/spawners) ~ 1 + stock:spawners + sst + region + era + sst:region:era, random = ~1 | stock,
+          method = "REML", correlation=corAR1(form= ~ 1 | stock), data = filter(run.dat, species=="Chum"))
+
+cplot <- as.data.frame(intervals(cbest, which="fixed")$fixed[c(2:5,27:29),])
+
+cplot$term <- rownames(cplot)
+
+cplot$term <- reorder(cplot$term, cplot$est.)
+
+ggplot(cplot, aes(term, est.)) + geom_errorbar(aes(ymax=upper, ymin=lower), width=0.2) + geom_point(size=3) + coord_flip() +
+  xlab("") + ylab("Coefficient") +  ggtitle("Chum salmon") + geom_hline(yintercept = 0) + 
+  theme(axis.text.y  = element_text(size=10))
+
+```
+
+No obvious difference in the regional effect of sst in the different eras, which makes it seem that c3 would have been a better model. I might be making a mistake in interpreting the likelihood ratio results?
