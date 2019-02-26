@@ -44,7 +44,7 @@ Begin by fitting the random effects. I'll compare a random intercept model, and 
 run.dat <- read.csv("coastwide salmon data with different sst groupings.csv", row.names = 1)
 
 formula.full <- 
-  as.formula(log(recruits/spawners) ~ 1 + stock:spawners + sst1:region + sst1:region:era)
+  as.formula(log(recruits/spawners) ~ 1 + stock:spawners +  sst1:region + sst1:region:era)
 
 # fixed effects model
 p1 <- gls(formula.full, method = "REML", 
